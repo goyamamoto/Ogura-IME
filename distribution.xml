@@ -1,16 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- pkgbuild.sh replaces @VERSION@ with the version and then uses this file -->
 <installer-gui-script minSpecVersion="1">
-    <pkg-ref id="dev.ensan.inputmethod.azooKeyMac"/>
-    <title>azooKey</title>
-    <options customize="never" require-scripts="false" hostArchitectures="x86_64,arm64"/>
+    <pkg-ref id="org.if0.inputmethod.ogura"/>
+    <title>Ogura</title>
+    <options customize="never" require-scripts="false" hostArchitectures="arm64"/>
+    <allowed-os-versions>
+        <os-version min="15.0"/>
+    </allowed-os-versions>
     <choices-outline>
         <line choice="default">
-            <line choice="dev.ensan.inputmethod.azooKeyMac"/>
+            <line choice="org.if0.inputmethod.ogura"/>
         </line>
     </choices-outline>
     <choice id="default"/>
-    <choice id="dev.ensan.inputmethod.azooKeyMac" visible="false">
-        <pkg-ref id="dev.ensan.inputmethod.azooKeyMac"/>
+    <choice id="org.if0.inputmethod.ogura" visible="false">
+        <pkg-ref id="org.if0.inputmethod.ogura"/>
     </choice>
-    <pkg-ref id="dev.ensan.inputmethod.azooKeyMac" version="0" onConclusion="none">azooKey-tmp.pkg</pkg-ref>
+    <pkg-ref id="org.if0.inputmethod.ogura" version="@VERSION@" onConclusion="none">Ogura-component.pkg</pkg-ref>
 </installer-gui-script>

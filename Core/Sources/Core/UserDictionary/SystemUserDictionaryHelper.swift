@@ -4,10 +4,10 @@ import AppKit
 import SQLite3
 #endif
 
-/// macOSのユーザ辞書データを取り出すためのヘルパー
+/// Helper that reads the macOS user dictionary data
 ///
 /// - note:
-///   `bash`コマンドとしては次の通りのものに対応
+///   Equivalent to this `bash` command:
 ///   ```bash
 ///   sqlite3 -header -csv ~/Library/KeyboardServices/TextReplacements.db "SELECT ZSHORTCUT, ZPHRASE FROM ZTEXTREPLACEMENTENTRY"
 ///   ```
@@ -53,8 +53,8 @@ public enum SystemUserDictionaryHelper: Sendable {
 
     @MainActor private static func promptUserForTextReplacementDirectory() -> URL? {
         let panel = NSOpenPanel()
-        panel.title = "システムのユーザ辞書ディレクトリ（KeyboardServices）を選択してください"
-        panel.message = "システムのユーザ辞書ディレクトリ（KeyboardServices）を選択してください"
+        panel.title = "ユーザ辞書のフォルダを選択"
+        panel.message = "macOS のユーザ辞書が保存されているフォルダ（KeyboardServices）を選択してください。"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
@@ -75,7 +75,7 @@ public enum SystemUserDictionaryHelper: Sendable {
         guard FileManager.default.fileExists(atPath: dbPath) else {
             throw .fileNotExist(dbPath)
         }
-        // 事前に取得を試みる
+        // Try to get it in advance
         print("dbPath", dbPath)
 
         let url: URL

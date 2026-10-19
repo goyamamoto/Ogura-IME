@@ -1,6 +1,6 @@
 //
 //  NSRange.swift
-//  azooKeyMac
+//  Ogura
 //
 //  Created by miwa on 2024/03/18.
 //

@@ -185,9 +185,7 @@ private func makeControlEvent(
         eventCore: controlBackquoteEvent,
         userAction: .unknown,
         inputLanguage: .japanese,
-        liveConversionEnabled: false,
-        enableDebugWindow: false,
-        enableSuggestion: false
+        liveConversionEnabled: false
     )
     guard case .fallthrough = noneAction, case .fallthrough = noneCallback else {
         Issue.record("Expected unknown action in none state to fall through, got \(noneAction), \(noneCallback)")
@@ -198,11 +196,9 @@ private func makeControlEvent(
         eventCore: controlBackquoteEvent,
         userAction: .unknown,
         inputLanguage: .japanese,
-        liveConversionEnabled: false,
-        enableDebugWindow: false,
-        enableSuggestion: false
+        liveConversionEnabled: false
     )
-    // Ctrl修飾付きの.unknownはcomposing中にmarked textを保護するためconsumeに変更されている
+    // .unknown with the Ctrl modifier was changed to consume during composing, to protect the marked text.
     guard case .consume = composingAction, case .fallthrough = composingCallback else {
         Issue.record("Expected unknown action with Ctrl in composing state to be consumed, got \(composingAction), \(composingCallback)")
         return
@@ -210,7 +206,7 @@ private func makeControlEvent(
 }
 
 @Test func testCtrlUnknownIsConsumedDuringComposingStates() {
-    // Ctrl+Shift+O などの未定義 Ctrl 系キーはcomposing系状態でconsumeされ、marked textの消失を防ぐ
+    // Undefined Ctrl keys such as Ctrl+Shift+O are consumed in composing-like states, so the marked text is not lost.
     let controlShiftOEvent = makeControlEvent(
         logicalKey: "o",
         characters: "O",
@@ -224,16 +220,14 @@ private func makeControlEvent(
         keyCode: 50
     )
 
-    let composingStates: [InputState] = [.composing, .previewing, .selecting, .replaceSuggestion]
+    let composingStates: [InputState] = [.composing, .previewing, .selecting]
     for state in composingStates {
         for event in [controlShiftOEvent, controlBackquoteEvent] {
             let (action, callback) = state.event(
                 eventCore: event,
                 userAction: .unknown,
                 inputLanguage: .japanese,
-                liveConversionEnabled: false,
-                enableDebugWindow: false,
-                enableSuggestion: false
+                liveConversionEnabled: false
             )
             guard case .consume = action, case .fallthrough = callback else {
                 Issue.record("Expected Ctrl unknown to be consumed in \(state) state, got \(action), \(callback)")
@@ -244,7 +238,7 @@ private func makeControlEvent(
 }
 
 @Test func testCtrlUnknownInNoneStateFallsThrough() {
-    // composing中でない場合は、アプリ側のショートカットが発火するようfallthroughされる
+    // When not composing, the key falls through so the app's shortcut can fire.
     let controlShiftOEvent = makeControlEvent(
         logicalKey: "o",
         characters: "O",
@@ -255,9 +249,7 @@ private func makeControlEvent(
         eventCore: controlShiftOEvent,
         userAction: .unknown,
         inputLanguage: .japanese,
-        liveConversionEnabled: false,
-        enableDebugWindow: false,
-        enableSuggestion: false
+        liveConversionEnabled: false
     )
     guard case .fallthrough = action, case .fallthrough = callback else {
         Issue.record("Expected Ctrl+Shift unknown in none state to fall through, got \(action), \(callback)")
@@ -272,15 +264,13 @@ private func makeControlEvent(
         modifiers: [],
         keyCode: 102
     )
-    let composingStates: [InputState] = [.composing, .previewing, .replaceSuggestion]
+    let composingStates: [InputState] = [.composing, .previewing]
     for state in composingStates {
         let (action, callback) = state.event(
             eventCore: event,
             userAction: .英数,
             inputLanguage: .japanese,
-            liveConversionEnabled: false,
-            enableDebugWindow: false,
-            enableSuggestion: false
+            liveConversionEnabled: false
         )
         guard case .selectInputLanguage(.english) = action, case .fallthrough = callback else {
             Issue.record("Expected Eisu in \(state) to keep composition while switching, got \(action), \(callback)")
@@ -296,15 +286,13 @@ private func makeControlEvent(
         modifiers: [],
         keyCode: 104
     )
-    let composingStates: [InputState] = [.composing, .previewing, .selecting, .replaceSuggestion]
+    let composingStates: [InputState] = [.composing, .previewing, .selecting]
     for state in composingStates {
         let (action, callback) = state.event(
             eventCore: event,
             userAction: .かな,
             inputLanguage: .japanese,
-            liveConversionEnabled: false,
-            enableDebugWindow: false,
-            enableSuggestion: false
+            liveConversionEnabled: false
         )
         guard case .selectInputLanguage(.japanese) = action, case .fallthrough = callback else {
             Issue.record("Expected Kana in Japanese \(state) to keep composition, got \(action), \(callback)")
@@ -314,7 +302,7 @@ private func makeControlEvent(
 }
 
 @Test func testNonModifierUnknownStillFallsThroughDuringComposing() {
-    // Ctrlを伴わない.unknownは従来通りfallthroughされる（既存挙動の回帰防止）
+    // .unknown without Ctrl still falls through as before (guards existing behavior against regressions).
     let bareEvent = makeControlEvent(
         logicalKey: nil,
         characters: nil,
@@ -325,9 +313,7 @@ private func makeControlEvent(
         eventCore: bareEvent,
         userAction: .unknown,
         inputLanguage: .japanese,
-        liveConversionEnabled: false,
-        enableDebugWindow: false,
-        enableSuggestion: false
+        liveConversionEnabled: false
     )
     guard case .fallthrough = action, case .fallthrough = callback else {
         Issue.record("Expected modifier-less unknown in composing state to fall through, got \(action), \(callback)")
@@ -364,9 +350,7 @@ private func makeControlEvent(
             eventCore: shiftLeftEvent,
             userAction: .navigation(.left),
             inputLanguage: .japanese,
-            liveConversionEnabled: false,
-            enableDebugWindow: false,
-            enableSuggestion: false
+            liveConversionEnabled: false
         )
         guard case .editSegment(-1) = leftAction else {
             Issue.record("Expected Shift+Left in \(state) to edit segment left, got \(leftAction)")
@@ -377,9 +361,7 @@ private func makeControlEvent(
             eventCore: shiftRightEvent,
             userAction: .navigation(.right),
             inputLanguage: .japanese,
-            liveConversionEnabled: false,
-            enableDebugWindow: false,
-            enableSuggestion: false
+            liveConversionEnabled: false
         )
         guard case .editSegment(1) = rightAction else {
             Issue.record("Expected Shift+Right in \(state) to edit segment right, got \(rightAction)")

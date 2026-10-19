@@ -3,26 +3,19 @@ extension Config {
 }
 
 extension Config.Deprecated {
-    /// 「、」「。」の代わりに「,」「.」を入力する設定
-    /// - note: この設定はv0.1.2以降PunctuationStyleで置き換える
+    /// Setting to type 「,」「.」 instead of 「、」「。」
+    /// - note: Replaced by PunctuationStyle in v0.1.2 and later
     struct TypeCommaAndPeriod: BoolConfigItem {
         static let `default` = false
-        static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.typeCommaAndPeriod"
+        static let key: String = "org.if0.inputmethod.ogura.preference.typeCommaAndPeriod"
     }
 
-    /// Zenzaiを利用する設定
-    /// - note: この設定はv0.1.2以降廃止。常時有効になる。
+    /// Setting to use Zenzai
+    /// - note: Removed in v0.1.2 and later. Zenzai is always on.
     @available(*, deprecated, message: "ZenzaiIntegration.value is always true")
     struct ZenzaiIntegration: BoolConfigItem {
         static let `default` = true
-        static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.enableZenzai"
+        static let key: String = "org.if0.inputmethod.ogura.preference.enableZenzai"
     }
 
-    /// OpenAI APIキー有効化設定
-    /// - note: この設定はAIBackendPreferenceで置き換える。マイグレーション用にのみ残す。
-    @available(*, deprecated, message: "Use AIBackendPreference instead")
-    struct EnableOpenAiApiKey: BoolConfigItem {
-        static let `default` = false
-        static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.enableOpenAiApiKey"
-    }
 }

@@ -1,0 +1,12 @@
+/* 
+  InfoPlist.strings
+  Ogura
+
+  Created by miwa on 2024/03/20.
+  
+*/
+
+CFBundleName = "Ogura";
+
+com.apple.inputmethod.Roman = "Ogura (English)";
+com.apple.inputmethod.Japanese = "Ogura (日本語)";

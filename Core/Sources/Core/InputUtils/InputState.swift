@@ -7,40 +7,48 @@ public enum InputState: Sendable, Hashable {
     case composing
     case previewing
     case selecting
-    case replaceSuggestion
     case unicodeInput(String)
 
-    // この種のコードは複雑にしかならないので、lintを無効にする
+    // This kind of code can only get complex, so disable the lint
     // swiftlint:disable:next cyclomatic_complexity
-    public func event(  // swiftlint:disable:this function_parameter_count
+    public func event(
         eventCore event: KeyEventCore,
         userAction: UserAction,
         inputLanguage: InputLanguage,
         liveConversionEnabled: Bool,
-        enableDebugWindow: Bool,
-        enableSuggestion: Bool
+        keyBindingStyle: Config.KeyBindingStyle.Value = .macOS
     ) -> (ClientAction, ClientActionCallback) {
+        if case .continuation = userAction {
+            switch self {
+            case .none:
+                return (.requestContinuation, .fallthrough)
+            case .composing, .previewing, .selecting:
+                return (.commitMarkedTextAndRequestContinuation, .transition(.none))
+            case .attachDiacritic, .unicodeInput:
+                return (.fallthrough, .fallthrough)
+            }
+        }
         if event.modifierFlags.contains(.command) {
             return (.fallthrough, .fallthrough)
         }
         if event.modifierFlags.contains(.option) {
             switch userAction {
-            case .input, .deadKey, .backspace:
+            case .input, .deadKey, .backspace, .deleteForward:
                 break
             case .enter where self == .composing:
                 break
-            case .tab where self == .composing || self == .previewing || self == .selecting || self == .replaceSuggestion:
+            case .tab where self == .composing || self == .previewing || self == .selecting:
                 break
-            case .navigation(let direction) where self == .composing || self == .previewing || self == .selecting || self == .replaceSuggestion:
+            case .navigation(let direction) where self == .composing || self == .previewing || self == .selecting:
                 switch direction {
                 case .up, .down, .left, .right:
                     return (.consume, .fallthrough)
                 }
-            case .escape where self == .composing || self == .previewing || self == .selecting || self == .replaceSuggestion:
+            case .escape where self == .composing || self == .previewing || self == .selecting:
                 return (.consume, .fallthrough)
-            case .英数 where self == .composing || self == .previewing || self == .selecting || self == .replaceSuggestion:
+            case .英数 where self == .composing || self == .previewing || self == .selecting:
                 return (.consume, .fallthrough)
-            case .かな where self == .composing || self == .previewing || self == .selecting || self == .replaceSuggestion:
+            case .かな where self == .composing || self == .previewing || self == .selecting:
                 return (.consume, .fallthrough)
             default:
                 return (.fallthrough, .fallthrough)
@@ -48,7 +56,7 @@ public enum InputState: Sendable, Hashable {
         }
         if event.modifierFlags.contains(.control) {
             switch userAction {
-            case .unknown where self == .composing || self == .previewing || self == .selecting || self == .replaceSuggestion:
+            case .unknown where self == .composing || self == .previewing || self == .selecting:
                 return (.consume, .fallthrough)
             default:
                 break
@@ -62,7 +70,7 @@ public enum InputState: Sendable, Hashable {
                 case .japanese:
                     return (.appendPieceToMarkedText(string), .transition(.composing))
                 case .english:
-                    // 連結する
+                    // Insert directly
                     return (.insertWithoutMarkedText(string.inputString(preferIntention: true)), .fallthrough)
                 }
             case .deadKey(let diacritic):
@@ -88,15 +96,9 @@ public enum InputState: Sendable, Hashable {
                 } else {
                     return (.insertWithoutMarkedText(" "), .fallthrough)
                 }
-            case .suggest:
-                if enableSuggestion {
-                    return (.requestPredictiveSuggestion, .transition(.replaceSuggestion))
-                } else {
-                    return (.fallthrough, .fallthrough)
-                }
             case .startUnicodeInput:
                 return (.enterUnicodeInputMode, .transition(.unicodeInput("")))
-            case .unknown, .navigation, .backspace, .enter, .escape, .function, .editSegment, .tab, .forget, .transformSelectedText:
+            case .unknown, .navigation, .backspace, .deleteForward, .enter, .escape, .function, .editSegment, .tab, .forget, .continuation:
                 return (.fallthrough, .fallthrough)
             }
         case .attachDiacritic(let diacritic):
@@ -124,7 +126,7 @@ public enum InputState: Sendable, Hashable {
                 return (.insertWithoutMarkedText(diacritic + "\t"), .transition(.none))
             case .startUnicodeInput:
                 return (.insertWithoutMarkedText(diacritic), .transition(.unicodeInput("")))
-            case .unknown, .space, .英数, .navigation, .editSegment, .suggest, .forget, .transformSelectedText:
+            case .unknown, .space, .英数, .navigation, .editSegment, .forget, .deleteForward, .continuation:
                 return (.insertWithoutMarkedText(diacritic), .transition(.none))
             }
         case .composing:
@@ -138,6 +140,13 @@ public enum InputState: Sendable, Hashable {
                     return (.consume, .fallthrough)
                 } else {
                     return (.removeLastMarkedText, .basedOnBackspace(ifIsEmpty: .none, ifIsNotEmpty: .composing))
+                }
+            case .deleteForward:
+                // Forward delete during conversion is handled by the IME, not passed through to the app (#355)
+                if event.modifierFlags.contains(.option) {
+                    return (.consume, .fallthrough)
+                } else {
+                    return (.removeForwardMarkedText, .basedOnBackspace(ifIsEmpty: .none, ifIsNotEmpty: .composing))
                 }
             case .enter:
                 if event.modifierFlags.contains(.option) {
@@ -188,20 +197,14 @@ public enum InputState: Sendable, Hashable {
                 } else if direction == .left && event.modifierFlags.contains(.shift) {
                     return (.editSegment(-1), .transition(.selecting))
                 } else {
-                    // ナビゲーションはハンドルしてしまう
+                    // Consume navigation keys
                     return (.consume, .fallthrough)
                 }
             case .editSegment(let count):
                 return (.editSegment(count), .transition(.selecting))
-            case .suggest:
-                if enableSuggestion {
-                    return (.requestReplaceSuggestion, .transition(.replaceSuggestion))
-                } else {
-                    return (.fallthrough, .fallthrough)
-                }
             case .startUnicodeInput:
                 return (.commitMarkedText, .transition(.unicodeInput("")))
-            case .unknown, .transformSelectedText, .deadKey:
+            case .unknown, .deadKey, .continuation:
                 return (.fallthrough, .fallthrough)
             }
         case .previewing:
@@ -213,9 +216,14 @@ public enum InputState: Sendable, Hashable {
             case .backspace:
                 if event.modifierFlags.contains(.option) {
                     return (.consume, .fallthrough)
+                } else if keyBindingStyle == .msIME {
+                    // MS-IME: BackSpace after conversion does not delete a character. It cancels the conversion and goes back to hiragana
+                    return (.cancelConversion, .transition(.composing))
                 } else {
                     return (.removeLastMarkedText, .transition(.composing))
                 }
+            case .deleteForward where keyBindingStyle == .msIME:
+                return (.cancelConversion, .transition(.composing))
             case .enter:
                 return (.commitMarkedText, .transition(.none))
             case .space:
@@ -239,7 +247,7 @@ public enum InputState: Sendable, Hashable {
                 return (.selectInputLanguage(.english), .fallthrough)
             case .かな:
                 return (.selectInputLanguage(.japanese), .fallthrough)
-            case .forget, .tab:
+            case .forget, .tab, .deleteForward:
                 return (.consume, .fallthrough)
             case .navigation(let direction):
                 if direction == .down {
@@ -249,35 +257,38 @@ public enum InputState: Sendable, Hashable {
                 } else if direction == .left && event.modifierFlags.contains(.shift) {
                     return (.editSegment(-1), .transition(.selecting))
                 } else {
-                    // ナビゲーションはハンドルしてしまう
+                    // Consume navigation keys
                     return (.consume, .fallthrough)
                 }
             case .editSegment(let count):
                 return (.editSegment(count), .transition(.selecting))
             case .startUnicodeInput:
                 return (.commitMarkedText, .transition(.unicodeInput("")))
-            case .unknown, .suggest, .transformSelectedText, .deadKey:
+            case .unknown, .deadKey, .continuation:
                 return (.fallthrough, .fallthrough)
             }
         case .selecting:
             switch userAction {
             case .input(let string):
-                let s = string.inputString(preferIntention: true)
-                if s == "d" && enableDebugWindow {
-                    return (.enableDebugWindow, .fallthrough)
-                } else if s == "D" && enableDebugWindow {
-                    return (.disableDebugWindow, .fallthrough)
-                }
-                // FIXME: ここの動作はmacOSの標準と異なる。具体的には、macOSの標準ではselectingをcomposingに戻して入力を継続する動きになる。
+                // FIXME: This differs from the macOS standard. In the macOS standard, selecting goes back to composing and input continues.
                 return (.commitMarkedTextAndAppendPieceToMarkedText(string), .transition(.composing))
             case .enter:
-                return (.submitSelectedCandidate, .basedOnSubmitCandidate(ifIsEmpty: .none, ifIsNotEmpty: .previewing))
+                if keyBindingStyle == .msIME {
+                    // MS-IME: Enter commits the selected candidate and the remaining segments together
+                    return (.commitAllCandidates, .transition(.none))
+                } else {
+                    return (.submitSelectedCandidate, .basedOnSubmitCandidate(ifIsEmpty: .none, ifIsNotEmpty: .previewing))
+                }
             case .backspace:
                 if event.modifierFlags.contains(.option) {
                     return (.consume, .fallthrough)
+                } else if keyBindingStyle == .msIME {
+                    return (.cancelConversion, .transition(.composing))
                 } else {
                     return (.removeLastMarkedText, .basedOnBackspace(ifIsEmpty: .none, ifIsNotEmpty: .composing))
                 }
+            case .deleteForward where keyBindingStyle == .msIME:
+                return (.cancelConversion, .transition(.composing))
             case .escape:
                 if liveConversionEnabled {
                     return (.hideCandidateWindow, .transition(.composing))
@@ -285,7 +296,7 @@ public enum InputState: Sendable, Hashable {
                     return (.enterFirstCandidatePreviewMode, .transition(.previewing))
                 }
             case .space:
-                // シフトが入っている場合は上に移動する
+                // If Shift is held, move up
                 if event.modifierFlags.contains(.shift) {
                     return (.selectPrevCandidate, .fallthrough)
                 } else {
@@ -332,55 +343,23 @@ public enum InputState: Sendable, Hashable {
             case .forget:
                 return (.forgetMemory, .fallthrough)
             case .英数:
-                // このケースでは確定して英数入力を始める
-                // FIXME: ここの動作はmacOSの標準と異なる。具体的には、selectInputLanguage(.english)相当の動作だけが発生する。
+                // In this case, commit and start alphanumeric input
+                // FIXME: This differs from the macOS standard. Specifically, only the equivalent of selectInputLanguage(.english) happens.
                 return (.commitMarkedTextAndSelectInputLanguage(.english), .fallthrough)
             case .かな:
                 return (.selectInputLanguage(.japanese), .fallthrough)
-            case .tab:
+            case .tab, .deleteForward:
                 return (.consume, .fallthrough)
             case .startUnicodeInput:
                 return (.submitSelectedCandidateAndEnterUnicodeInputMode, .transition(.unicodeInput("")))
-            case .unknown, .suggest, .transformSelectedText, .deadKey:
-                return (.fallthrough, .fallthrough)
-            }
-        case .replaceSuggestion:
-            switch userAction {
-            // 入力があったらcomposingに戻る
-            case .input(let string):
-                return (.appendPieceToMarkedText(string), .transition(.composing))
-            case .space:
-                return (.selectNextReplaceSuggestionCandidate, .fallthrough)
-            case .navigation(let direction):
-                if direction == .down {
-                    return (.selectNextReplaceSuggestionCandidate, .fallthrough)
-                } else if direction == .up {
-                    return (.selectPrevReplaceSuggestionCandidate, .fallthrough)
-                } else {
-                    return (.consume, .fallthrough)
-                }
-            case .suggest:
-                return (.requestReplaceSuggestion, .fallthrough)
-            case .enter:
-                return (.submitReplaceSuggestionCandidate, .transition(.none))
-            case .backspace, .escape:
-                return (.hideReplaceSuggestionWindow, .transition(.composing))
-            case .英数:
-                return (.selectInputLanguage(.english), .fallthrough)
-            case .かな:
-                return (.selectInputLanguage(.japanese), .fallthrough)
-            case .forget, .tab:
-                return (.consume, .fallthrough)
-            case .startUnicodeInput:
-                return (.hideReplaceSuggestionWindow, .transition(.unicodeInput("")))
-            case .unknown, .function, .number, .editSegment, .transformSelectedText, .deadKey:
+            case .unknown, .deadKey, .continuation:
                 return (.fallthrough, .fallthrough)
             }
         case .unicodeInput(let codePoint):
             switch userAction {
             case .input(let pieces):
                 let input = pieces.inputString(preferIntention: true).lowercased()
-                // 16進数のみ受け付ける
+                // Accept hexadecimal digits only
                 let hexChars = CharacterSet(charactersIn: "0123456789abcdef")
                 let filteredInput = input.unicodeScalars.filter { hexChars.contains($0) }.map { String($0) }.joined()
                 if !filteredInput.isEmpty {
@@ -406,7 +385,7 @@ public enum InputState: Sendable, Hashable {
                 }
             case .escape:
                 return (.cancelUnicodeInput, .transition(.none))
-            case .英数, .かな, .tab, .forget, .function, .navigation, .editSegment, .suggest, .transformSelectedText, .deadKey, .startUnicodeInput, .unknown:
+            case .英数, .かな, .tab, .forget, .function, .navigation, .editSegment, .deadKey, .startUnicodeInput, .unknown, .deleteForward, .continuation:
                 return (.consume, .fallthrough)
             }
         }

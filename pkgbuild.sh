@@ -1,92 +1,119 @@
-set -ex
+#!/bin/bash
+# Build the pkg for distribution. The output is build/pkg/Ogura-<version>.pkg (it installs into /Library/Input Methods).
+#
+# Usage:
+#   ./pkgbuild.sh --team <TEAM_ID>   Build a pkg signed with Developer ID and notarized (needs the Apple Developer Program)
+#   ./pkgbuild.sh --unsigned         Build a pkg with no signing or notarization. Only for checking the contents; not for distribution
+#
+# Before a signed build, set up these once on this Mac:
+#   - Developer ID Application and Developer ID Installer certificates (Xcode > Settings > Accounts > Manage Certificates)
+#   - Notarization credentials: xcrun notarytool store-credentials "Notarytool" --apple-id <Apple ID> --team-id <TEAM_ID> --password <app-specific password>
+#     (change the profile name with the environment variable OGURA_NOTARY_PROFILE)
+#   - Metal Toolchain to compile the MLX shaders: xcodebuild -downloadComponent MetalToolchain
+# The version comes from Xcode's MARKETING_VERSION (CFBundleShortVersionString). Raise it for every release.
+set -euo pipefail
 
-PROJECT_NAME="azooKeyMac"
-SCHEME="azooKeyMac"
-CONFIGURATION="Release"
-ARCHIVE_PATH="./build/archive.xcarchive"
-EXPORT_PATH="./build/export"
-EXPORT_OPTIONS_PLIST="./exportOptions.plist"
-PKG_SCRIPTS_SOURCE_PATH="./pkg-scripts"
-PKG_SCRIPTS_PATH="./build/pkg-scripts"
+TEAM_ID="${OGURA_TEAM_ID:-}"
+UNSIGNED=false
+NOTARY_PROFILE="${OGURA_NOTARY_PROFILE:-Notarytool}"
+INSTALLER_IDENTITY="${OGURA_INSTALLER_IDENTITY:-Developer ID Installer}"
 
-# 1. Clean Build
-rm -rf ./build
-mkdir -p ./build
-rm -rf ./Core/.build
-rm -f ./Core/Package.resolved
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --team) TEAM_ID="${2:?--team に Team ID を指定してください}"; shift ;;
+        --unsigned) UNSIGNED=true ;;
+        *) echo "Unknown parameter passed: $1"; exit 1 ;;
+    esac
+    shift
+done
 
-# 2. Archive
-# Note: use `"$(mktemp -d)` to avoid conflicts with previous builds
-xcodebuild \
-  -project "${PROJECT_NAME}.xcodeproj" \
-  -scheme "${SCHEME}" \
-  clean archive \
-  -configuration "${CONFIGURATION}" \
-  -archivePath "${ARCHIVE_PATH}" \
-  -derivedDataPath "$(mktemp -d)" \
-  -clonedSourcePackagesDirPath $(mktemp -d) \
-  -allowProvisioningUpdates \
-  -destination "generic/platform=macOS"
+if [ "$UNSIGNED" = false ] && [ -z "$TEAM_ID" ]; then
+    echo "署名に使う Team ID を指定してください: ./pkgbuild.sh --team <TEAM_ID>（または環境変数 OGURA_TEAM_ID）"
+    echo "証明書なしで中身だけを確認するには、./pkgbuild.sh --unsigned を実行してください。"
+    exit 1
+fi
 
-# 3. Export
-xcodebuild -exportArchive \
-  -archivePath "${ARCHIVE_PATH}" \
-  -exportPath "${EXPORT_PATH}" \
-  -exportOptionsPlist "${EXPORT_OPTIONS_PLIST}" \
-  -allowProvisioningUpdates
+cd "$(dirname "$0")"
 
-# 4. Notarize .app
-APP_PATH="${EXPORT_PATH}/${PROJECT_NAME}.app"
-APP_ZIP="${PROJECT_NAME}.zip"
+if ! xcrun metal -v > /dev/null 2>&1; then
+    echo "Metal Toolchain が見つかりません。xcodebuild -downloadComponent MetalToolchain を実行してインストールしてください。"
+    exit 1
+fi
 
-# Zip the .app for notarization
-ditto -c -k --sequesterRsrc --keepParent "${APP_PATH}" "${APP_ZIP}"
+OUT="build/pkg"
+ARCHIVE_PATH="${OUT}/archive.xcarchive"
+EXPORT_PATH="${OUT}/export"   # Contents of the pkg. Holds only Ogura.app
+APP_PATH="${EXPORT_PATH}/Ogura.app"
 
-# Submit the .app (zip) for notarization
-xcrun notarytool submit "${APP_ZIP}" --keychain-profile "Notarytool" --wait
+# Delete only the previous pkg work folder (keep development folders such as build/DerivedData)
+rm -rf "${OUT}"
+mkdir -p "${OUT}"
 
-# Staple the notarization ticket to the .app
-xcrun stapler staple "${APP_PATH}"
+set -x
+if [ "$UNSIGNED" = true ]; then
+    # Same build as install.sh --adhoc. It is ad-hoc signed, so it runs only on this Mac
+    xcodebuild -project Ogura.xcodeproj -scheme Ogura -configuration Release \
+        -derivedDataPath build/DerivedData build \
+        -destination "generic/platform=macOS" ARCHS=arm64 \
+        CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+        ENABLE_CODE_COVERAGE=NO CLANG_COVERAGE_MAPPING=NO
+    mkdir -p "${EXPORT_PATH}"
+    cp -R build/DerivedData/Build/Products/Release/Ogura.app "${APP_PATH}"
+    codesign --force --deep --sign - --entitlements Ogura/Ogura.entitlements "${APP_PATH}"
+else
+    # Fetch dependencies fresh every time and do not reuse leftovers from earlier builds. MLX runs only on Apple Silicon, so build arm64 only
+    xcodebuild -project Ogura.xcodeproj -scheme Ogura -configuration Release \
+        clean archive \
+        -archivePath "${ARCHIVE_PATH}" \
+        -derivedDataPath "$(mktemp -d)" \
+        -clonedSourcePackagesDirPath "$(mktemp -d)" \
+        -destination "generic/platform=macOS" ARCHS=arm64 \
+        DEVELOPMENT_TEAM="${TEAM_ID}" CODE_SIGN_STYLE=Automatic \
+        ENABLE_CODE_COVERAGE=NO CLANG_COVERAGE_MAPPING=NO \
+        -allowProvisioningUpdates
+    xcodebuild -exportArchive \
+        -archivePath "${ARCHIVE_PATH}" \
+        -exportPath "${EXPORT_PATH}" \
+        -exportOptionsPlist exportOptions.plist \
+        -allowProvisioningUpdates
+    rm -f "${EXPORT_PATH}/Packaging.log" "${EXPORT_PATH}/DistributionSummary.plist" "${EXPORT_PATH}/ExportOptions.plist"
 
-# Remove the temporary zip
-rm "${APP_ZIP}"
-rm ${EXPORT_PATH}/Packaging.log
-rm ${EXPORT_PATH}/DistributionSummary.plist
-rm ${EXPORT_PATH}/ExportOptions.plist
+    # Notarize the .app and staple the ticket
+    ditto -c -k --sequesterRsrc --keepParent "${APP_PATH}" "${OUT}/Ogura.zip"
+    xcrun notarytool submit "${OUT}/Ogura.zip" --keychain-profile "${NOTARY_PROFILE}" --wait
+    xcrun stapler staple "${APP_PATH}"
+    rm "${OUT}/Ogura.zip"
+fi
+codesign --verify --deep --strict "${APP_PATH}"
 
-mkdir -p "${PKG_SCRIPTS_PATH}"
-cp "${PKG_SCRIPTS_SOURCE_PATH}/postinstall" "${PKG_SCRIPTS_PATH}/postinstall"
-cp "./Tools/write_converter_server_launch_agent.sh" "${PKG_SCRIPTS_PATH}/write_converter_server_launch_agent.sh"
-chmod +x "${PKG_SCRIPTS_PATH}/postinstall" "${PKG_SCRIPTS_PATH}/write_converter_server_launch_agent.sh"
+VERSION="$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "${APP_PATH}/Contents/Info.plist")"
 
-# Suppose we have build/azooKeyMac.app
-# Use this script to create a plist package for distribution
-# pkgbuild --analyze --root ./build/ pkg.plist
+pkgbuild --root "${EXPORT_PATH}" \
+    --scripts pkg-scripts \
+    --component-plist pkg.plist \
+    --identifier org.if0.inputmethod.ogura \
+    --version "${VERSION}" \
+    --install-location "/Library/Input Methods" \
+    "${OUT}/Ogura-component.pkg"
 
-# Create a temporary package
-pkgbuild --root ${EXPORT_PATH} \
-         --scripts ${PKG_SCRIPTS_PATH} \
-         --component-plist pkg.plist --identifier dev.ensan.inputmethod.azooKeyMac \
-         --version 0 \
-         --install-location /Library/Input\ Methods \
-         azooKey-tmp.pkg
+sed "s/@VERSION@/${VERSION}/g" distribution.xml > "${OUT}/distribution.xml"
 
-# Create a distribution file
-# productbuild --synthesize --package azooKey-tmp.pkg distribution.xml
+if [ "$UNSIGNED" = true ]; then
+    productbuild --distribution "${OUT}/distribution.xml" --package-path "${OUT}" "${OUT}/Ogura-${VERSION}-unsigned.pkg"
+    rm "${OUT}/Ogura-component.pkg"
+    set +x
+    echo "作成しました: ${OUT}/Ogura-${VERSION}-unsigned.pkg（署名なし。配布には使えません）"
+    exit 0
+fi
 
-# Build the final package
-productbuild --distribution distribution.xml --package-path . azooKey-release.pkg
+productbuild --distribution "${OUT}/distribution.xml" --package-path "${OUT}" "${OUT}/Ogura-unsigned.pkg"
+rm "${OUT}/Ogura-component.pkg"
+productsign --sign "${INSTALLER_IDENTITY}" "${OUT}/Ogura-unsigned.pkg" "${OUT}/Ogura-${VERSION}.pkg"
+rm "${OUT}/Ogura-unsigned.pkg"
 
-# Clean up
-rm azooKey-tmp.pkg
-
-# Sign Pkg
-productsign --sign "Developer ID Installer" ./azooKey-release.pkg ./azooKey-release-signed.pkg
-rm azooKey-release.pkg
-
-# Submit for Notarization
-# For fork developers: You would need to update `--keychain--profile "Notarytool"` part, because this is environment-depenedent command.
-xcrun notarytool submit azooKey-release-signed.pkg --keychain-profile "Notarytool" --wait
-
-# Staple
-xcrun stapler staple azooKey-release-signed.pkg
+# Notarize the pkg and staple the ticket
+xcrun notarytool submit "${OUT}/Ogura-${VERSION}.pkg" --keychain-profile "${NOTARY_PROFILE}" --wait
+xcrun stapler staple "${OUT}/Ogura-${VERSION}.pkg"
+pkgutil --check-signature "${OUT}/Ogura-${VERSION}.pkg"
+set +x
+echo "作成しました: ${OUT}/Ogura-${VERSION}.pkg"

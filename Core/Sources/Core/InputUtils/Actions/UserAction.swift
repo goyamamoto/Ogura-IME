@@ -4,6 +4,8 @@ import KanaKanjiConverterModule
 public enum UserAction {
     case input([InputPiece])
     case backspace
+    /// Forward delete with fn+Delete or the Del key
+    case deleteForward
     case enter
     case space(prefersFullWidthWhenInput: Bool)
     case escape
@@ -15,11 +17,11 @@ public enum UserAction {
     case function(Function)
     case number(Number)
     case editSegment(Int)
-    case suggest
     case forget
-    case transformSelectedText
     case deadKey(String)
     case startUnicodeInput
+    /// Continue writing (Shift+Tab, Ctrl+/, F19)
+    case continuation
 
     public enum NavigationDirection: Sendable, Equatable, Hashable {
         case up, down, right, left
@@ -80,7 +82,15 @@ public enum UserAction {
         }
     }
 
-    private static func intention(_ c: Character, invertPunctuation: Bool) -> Character? {
+    /// The keys typed in half width when Config.TypeHalfWidthSymbols is on: the symbol keys the Japanese mode makes full
+    /// width, except the punctuation keys (Config.PunctuationStyle), the long vowel mark (ー), the middle dot (・), and the
+    /// brackets 「」『』, which are Japanese writing
+    static let halfWidthSymbolKeys: Set<Character> = [
+        "!", "\"", "#", "$", "%", "&", "'", "(", ")", "=", "~", "|", "`", "+", "*", "<", ">", "?", "_", "^", "\\", "¥", "@", ";", ":"
+    ]
+
+    /// The character the key `c` is meant to make in the Japanese mode (％ for %); nil when it is the key itself
+    private static func intention(_ c: Character, invertPunctuation: Bool, typeHalfWidthSymbols: Bool) -> Character? {
         switch c {
         case ",":
             let normal: Character = switch Config.PunctuationStyle().value {
@@ -101,18 +111,42 @@ public enum UserAction {
             }
             return normal
         default:
+            if typeHalfWidthSymbols, Self.halfWidthSymbolKeys.contains(c) {
+                return nil
+            }
             return KeyMap.h2zMap(c)
         }
     }
 
-    // この種のコードは複雑にしかならないので、lintを無効にする
+    /// Key code reserved for "continue writing" (F19). You can make a key on your keyboard send this code.
+    public static let continuationKeyCode: UInt16 = 80
+
+    // This kind of code can only get complex, so disable the lint
     // swiftlint:disable:next cyclomatic_complexity
     public static func getUserAction(
         eventCore: KeyEventCore,
         inputLanguage: InputLanguage,
-        typeBackSlash: Bool? = nil
+        typeBackSlash: Bool? = nil,
+        typeHalfWidthSymbols: Bool? = nil,
+        keyBindingStyle: Config.KeyBindingStyle.Value? = nil,
+        continuationKeys: ContinuationKeys? = nil
     ) -> UserAction {
         let typeBackSlash = typeBackSlash ?? Config.TypeBackSlash().value
+        let typeHalfWidthSymbols = typeHalfWidthSymbols ?? Config.TypeHalfWidthSymbols().value
+        let keyBindingStyle = keyBindingStyle ?? Config.KeyBindingStyle().value
+        let continuationKeys = continuationKeys ?? ContinuationKeys.current
+        if continuationKeys.contains(.shiftTab), eventCore.modifierFlags == [.shift], eventCore.keyCode == 48 {
+            // Shift+Tab: continue writing (not passed to the app while Ogura is selected)
+            return .continuation
+        }
+        if continuationKeys.contains(.f19), eventCore.modifierFlags.isEmpty, eventCore.keyCode == Self.continuationKeyCode {
+            // F19: normal keyboards do not have it and macOS gives it no default function, so any key can be assigned to it on the keyboard side
+            return .continuation
+        }
+        if continuationKeys.contains(.controlSlash), eventCore.modifierFlags == [.control], eventCore.charactersIgnoringModifiers == "/" {
+            // Ctrl+/ : continue writing (neither MS-IME nor the macOS standard uses this key. Ctrl+; is half-width katakana)
+            return .continuation
+        }
         // see: https://developer.mozilla.org/ja/docs/Web/API/UI_Events/Keyboard_event_code_values#mac_%E3%81%A7%E3%81%AE%E3%82%B3%E3%83%BC%E3%83%89%E5%80%A4
         func keyMap(_ string: String, invertPunctuation: Bool = false) -> [InputPiece] {
             switch inputLanguage {
@@ -120,13 +154,20 @@ public enum UserAction {
                 return string.map { .character($0) }
             case .japanese:
                 return string.map {
-                    .key(intention: intention($0, invertPunctuation: invertPunctuation), input: $0, modifiers: [])
+                    .key(intention: intention($0, invertPunctuation: invertPunctuation, typeHalfWidthSymbols: typeHalfWidthSymbols), input: $0, modifiers: [])
                 }
             }
+        }
+        /// The symbols as typed, in half width, for keys that make a full-width symbol otherwise (［ with Option)
+        func halfWidthKeys(_ string: String) -> [InputPiece] {
+            string.map { .key(intention: nil, input: $0, modifiers: []) }
         }
 
         // Resolve action based on logical key character (ignoring modifiers)
         if let logicalKey = eventCore.charactersIgnoringModifiers?.lowercased() {
+            if keyBindingStyle == .msIME, let action = Self.msIMEControlShortcut(logicalKey: logicalKey, modifierFlags: eventCore.modifierFlags) {
+                return action
+            }
             switch (logicalKey, eventCore.modifierFlags) {
             case (let key, [.option])
                     where DiacriticAttacher.deadKeyList.contains(key) && inputLanguage == .english:
@@ -158,8 +199,6 @@ public enum UserAction {
                 return .function(.ten)
             case ("'", [.control]): // Control + '
                 return .function(.ten)
-            case ("s", [.control]): // Control + s
-                return .suggest
             case ("u", [.control, .shift]): // Shift + Control + u
                 return .startUnicodeInput
 
@@ -183,15 +222,15 @@ public enum UserAction {
             case ("/", [.shift]) where inputLanguage == .japanese:
                 return .input(keyMap("?"))
             case ("/", [.option]) where inputLanguage == .japanese:
-                return .input(keyMap("／"))
+                return .input(typeHalfWidthSymbols ? halfWidthKeys("/") : keyMap("／"))
             case ("[", [.option]) where inputLanguage == .japanese:
-                return .input(keyMap("［"))
+                return .input(typeHalfWidthSymbols ? halfWidthKeys("[") : keyMap("［"))
             case ("[", [.shift, .option]) where inputLanguage == .japanese:
-                return .input(keyMap("｛"))
+                return .input(typeHalfWidthSymbols ? halfWidthKeys("{") : keyMap("｛"))
             case ("]", [.option]) where inputLanguage == .japanese:
-                return .input(keyMap("］"))
+                return .input(typeHalfWidthSymbols ? halfWidthKeys("]") : keyMap("］"))
             case ("]", [.shift, .option]) where inputLanguage == .japanese:
-                return .input(keyMap("｝"))
+                return .input(typeHalfWidthSymbols ? halfWidthKeys("}") : keyMap("｝"))
             case (",", [.option]) where inputLanguage == .japanese:
                 return .input(keyMap(",", invertPunctuation: true))
             case (".", [.option]) where inputLanguage == .japanese:
@@ -202,9 +241,9 @@ public enum UserAction {
         }
 
         if eventCore.modifierFlags.contains(.control), eventCore.keyCode != 51 {
-            // logicalKeyで既知のControlショートカットを処理した後、
-            // 後続の物理キー処理をする前に未定義のControl系をホストアプリへ渡す
-            // Ctrl+Delete(keyCode 51)だけは.forgetとして下のDelete分岐で扱う
+            // After handling the known Control shortcuts through logicalKey,
+            // pass undefined Control combinations to the host app before handling the physical keys below
+            // Only Ctrl+Delete (keyCode 51) is handled as .forget in the Delete branch below
             return .unknown
         }
 
@@ -217,7 +256,7 @@ public enum UserAction {
         case 49: // Space
             switch (Config.TypeHalfSpace().value, eventCore.modifierFlags.contains(.shift)) {
             case (true, true), (false, false):
-                // 全角スペース
+                // Full-width space (U+3000)
                 return .space(prefersFullWidthWhenInput: true)
             case (true, false), (false, true):
                 return .space(prefersFullWidthWhenInput: false)
@@ -240,7 +279,7 @@ public enum UserAction {
             return .function(.nine)
         case 109: // F10
             return .function(.ten)
-        case 102: // 英数
+        case 102: // 英数 (Eisu) key
             return .英数
         case 104: // Lang1/kVK_JIS_Kana
             return .かな
@@ -258,12 +297,14 @@ public enum UserAction {
             return .input([.character(",")])
         case 0x41: // Numpad Period
             return .input([.character(".")])
-        case 0x73, 0x77, 0x74, 0x79, 0x75, 0x47:
-            // Numpadでそれぞれ「入力先頭にカーソルを移動」「入力末尾にカーソルを移動」「変換候補欄を1ページ戻る」「変換候補欄を1ページ進む」「順方向削除」「入力全消し（より強いエスケープ）」に対応するが、サポート外の動作として明示的に無効化
+        case 0x75: // Forward Delete (fn+Delete / Del)
+            return .deleteForward
+        case 0x73, 0x77, 0x74, 0x79, 0x47:
+            // On the numpad these keys mean: move the cursor to the start of the input, move it to the end, go back one page in the candidate list, go forward one page, and clear all input (a stronger Escape). These actions are not supported, so they are disabled explicitly
             return .unknown
         case 18, 19, 20, 21, 23, 22, 26, 28, 25, 29:
-            // Control+数字はアプリやOS側のショートカットとして使われるため、数字入力としない
-            // keyCode分岐に入る前に.unknownとして処理されるが、念のためここでも明示的に扱う
+            // Control+number is used for app or OS shortcuts, so do not treat it as number input
+            // It is already handled as .unknown before the keyCode switch, but handle it here too, just in case
             if eventCore.modifierFlags.isDisjoint(with: [.shift, .option, .control]) {
                 let number: UserAction.Number = [
                     18: .one,
@@ -279,7 +320,7 @@ public enum UserAction {
                 ][eventCore.keyCode]!
                 return .number(number)
             } else if eventCore.keyCode == 29 && eventCore.modifierFlags.contains(.shift) && eventCore.characters == "0" {
-                // JISキーボードにおいてShift+0の場合は特別な処理になる
+                // On a JIS keyboard, Shift+0 needs special handling
                 return .number(.shiftZero)
             } else {
                 // go default
@@ -292,6 +333,32 @@ public enum UserAction {
                 return .unknown
             }
         }
+    }
+
+    /// Ctrl shortcuts from MS-IME. These take priority over the macOS standard bindings.
+    /// When there is no input, `InputState` passes all of them through to the app (so they do not block undo with Ctrl+Z and similar).
+    private static func msIMEControlShortcut(logicalKey: String, modifierFlags: KeyEventCore.ModifierFlag) -> UserAction? {
+        guard modifierFlags == [.control] else {
+            return nil
+        }
+        let shortcuts: [String: UserAction] = [
+            "u": .function(.six),          // Hiragana
+            "i": .function(.seven),        // Full-width katakana
+            "o": .function(.eight),        // Half-width katakana
+            "p": .function(.nine),         // Full-width alphanumerics
+            "t": .function(.ten),          // Half-width alphanumerics
+            "k": .editSegment(-1),         // Shrink the segment
+            "l": .editSegment(1),          // Extend the segment
+            "e": .navigation(.up),         // Previous candidate
+            "x": .navigation(.down),       // Next candidate
+            "n": .navigation(.right),      // Commit the first segment and move to the next one
+            "d": .navigation(.right),      // Move the focused segment right
+            "s": .navigation(.left),       // Move the focused segment left (does nothing, because there is only one segment)
+            "z": .escape,                  // Cancel conversion / clear all
+            "g": .escape,
+            "\r": .enter                   // Commit with Ctrl+Enter
+        ]
+        return shortcuts[logicalKey]
     }
 
     private static func isPrintable(_ text: String) -> Bool {

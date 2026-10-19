@@ -16,8 +16,8 @@ private func makeCandidate(text: String, reading: String) -> Candidate {
 private func makePredictionSegmentsManager() -> SegmentsManager {
     SegmentsManager(
         kanaKanjiConverter: .withDefaultDictionary(),
-        applicationDirectoryURL: URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true),
-        containerURL: nil,
+        applicationDirectoryURL: testLearningDirectory,
+        personalizationDirectoryURL: nil,
         context: .init(useZenzai: false)
     )
 }
@@ -72,19 +72,4 @@ private func makePredictionSegmentsManager() -> SegmentsManager {
     manager.acceptPredictionCandidate(makeCandidate(text: "今晩は", reading: "こんばんは"))
 
     #expect(manager.convertTarget == "こんにちは")
-}
-
-@MainActor
-@Test func testAcceptTypoCorrectionPredictionCandidateReplacesReading() throws {
-    let manager = makePredictionSegmentsManager()
-    manager.insertAtCursorPosition("こんびんは", inputStyle: .direct)
-    let prediction = try #require(SegmentsManager.makeBackspaceTypoCorrectionPredictionCandidate(
-        currentConvertTarget: manager.convertTarget,
-        targetReading: "こんばんは",
-        displayText: "今晩は"
-    ))
-
-    manager.acceptTypoCorrectionPredictionCandidate(prediction)
-
-    #expect(manager.convertTarget == "こんばんは")
 }

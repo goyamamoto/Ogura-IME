@@ -17,11 +17,35 @@
 				<key>BundleOverwriteAction</key>
 				<string></string>
 				<key>RootRelativeBundlePath</key>
-				<string>azooKeyMac.app/Contents/Resources/AzooKeyKanakanjiConverter_KanaKanjiConverterModuleWithDefaultDictionary.bundle</string>
+				<string>Ogura.app/Contents/Resources/swift-transformers_Hub.bundle</string>
+			</dict>
+			<dict>
+				<key>BundleOverwriteAction</key>
+				<string></string>
+				<key>RootRelativeBundlePath</key>
+				<string>Ogura.app/Contents/Resources/AzooKeyKanaKanjiConverter_EfficientNGram.bundle</string>
+			</dict>
+			<dict>
+				<key>BundleOverwriteAction</key>
+				<string></string>
+				<key>RootRelativeBundlePath</key>
+				<string>Ogura.app/Contents/Resources/mlx-swift_Cmlx.bundle</string>
+			</dict>
+			<dict>
+				<key>BundleOverwriteAction</key>
+				<string></string>
+				<key>RootRelativeBundlePath</key>
+				<string>Ogura.app/Contents/Resources/AzooKeyKanaKanjiConverter_KanaKanjiConverterModuleWithDefaultDictionary.bundle</string>
+			</dict>
+			<dict>
+				<key>BundleOverwriteAction</key>
+				<string></string>
+				<key>RootRelativeBundlePath</key>
+				<string>Ogura.app/Contents/Frameworks/llama.framework</string>
 			</dict>
 		</array>
 		<key>RootRelativeBundlePath</key>
-		<string>azooKeyMac.app</string>
+		<string>Ogura.app</string>
 	</dict>
 </array>
 </plist>

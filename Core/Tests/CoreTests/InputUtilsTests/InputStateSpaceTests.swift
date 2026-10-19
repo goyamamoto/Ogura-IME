@@ -17,9 +17,7 @@ struct InputStateSpaceTests {
             eventCore: spaceEvent,
             userAction: .space(prefersFullWidthWhenInput: false),
             inputLanguage: .english,
-            liveConversionEnabled: false,
-            enableDebugWindow: false,
-            enableSuggestion: false
+            liveConversionEnabled: false
         )
         guard case .appendToMarkedText(let text) = action else {
             Issue.record("Expected appendToMarkedText, got \(action)")
@@ -33,9 +31,7 @@ struct InputStateSpaceTests {
             eventCore: spaceEvent,
             userAction: .space(prefersFullWidthWhenInput: false),
             inputLanguage: .english,
-            liveConversionEnabled: true,
-            enableDebugWindow: false,
-            enableSuggestion: false
+            liveConversionEnabled: true
         )
         guard case .appendToMarkedText(let text) = action else {
             Issue.record("Expected appendToMarkedText, got \(action)")
@@ -49,9 +45,7 @@ struct InputStateSpaceTests {
             eventCore: spaceEvent,
             userAction: .space(prefersFullWidthWhenInput: false),
             inputLanguage: .japanese,
-            liveConversionEnabled: true,
-            enableDebugWindow: false,
-            enableSuggestion: false
+            liveConversionEnabled: true
         )
         guard case .enterCandidateSelectionMode = action else {
             Issue.record("Expected enterCandidateSelectionMode, got \(action)")
@@ -68,9 +62,7 @@ struct InputStateSpaceTests {
             eventCore: spaceEvent,
             userAction: .space(prefersFullWidthWhenInput: false),
             inputLanguage: .japanese,
-            liveConversionEnabled: false,
-            enableDebugWindow: false,
-            enableSuggestion: false
+            liveConversionEnabled: false
         )
         guard case .enterFirstCandidatePreviewMode = action else {
             Issue.record("Expected enterFirstCandidatePreviewMode, got \(action)")

@@ -20,52 +20,63 @@ extension BoolConfigItem {
 }
 
 extension Config {
-    /// デバッグウィンドウにd/Dで遷移する設定
-    public struct DebugWindow: BoolConfigItem {
-        public init() {}
-        static let `default` = false
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.debug.enableDebugWindow"
-    }
-    /// 予測入力のデバッグ機能を有効化する設定
+    /// Setting that enables debug features for prediction
     public struct DebugPredictiveTyping: BoolConfigItem {
         public init() {}
         static let `default` = false
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.debug.predictiveTyping"
+        public static let key: String = "org.if0.inputmethod.ogura.preference.debug.predictiveTyping"
     }
-    /// 入力訂正のデバッグ機能を有効化する設定
-    public struct DebugTypoCorrection: BoolConfigItem {
-        public init() {}
-        static let `default` = false
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.debug.typoCorrection"
-    }
-    /// ライブ変換を有効化する設定
+    /// Setting that enables live conversion
     public struct LiveConversion: BoolConfigItem {
         public init() {}
         static let `default` = true
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.enableLiveConversion"
+        public static let key: String = "org.if0.inputmethod.ogura.preference.enableLiveConversion"
     }
-    /// 円マークの代わりにバックスラッシュを入力する設定
+    /// Setting to type a backslash instead of the yen sign
     public struct TypeBackSlash: BoolConfigItem {
         public init() {}
         static let `default` = false
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.typeBackSlash"
+        public static let key: String = "org.if0.inputmethod.ogura.preference.typeBackSlash"
     }
-    /// 「　」の代わりに「 」を入力する設定
+    /// Setting to type a half-width space (" ") instead of a full-width space (U+3000)
     public struct TypeHalfSpace: BoolConfigItem {
         public init() {}
         static let `default` = false
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.typeHalfSpace"
+        public static let key: String = "org.if0.inputmethod.ogura.preference.typeHalfSpace"
     }
-    /// Optionキー押下時に直接全角英数を入力する設定
+    /// Setting to type symbols (% + = and so on) in half width rather than full width. The punctuation keys, the long
+    /// vowel mark ー, the middle dot ・, and the brackets 「」『』 are Japanese writing and stay full width
+    /// (`UserAction.halfWidthSymbolKeys`)
+    public struct TypeHalfWidthSymbols: BoolConfigItem {
+        public init() {}
+        static let `default` = false
+        public static let key: String = "org.if0.inputmethod.ogura.preference.typeHalfWidthSymbols"
+    }
+    /// Setting to type full-width alphanumerics directly while the Option key is held
     public struct OptionDirectFullWidthInput: BoolConfigItem {
         public init() {}
         static let `default` = false
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.optionDirectFullWidthInput"
+        public static let key: String = "org.if0.inputmethod.ogura.preference.optionDirectFullWidthInput"
     }
-    /// AI変換時にコンテキストを含めるかどうか
-    public struct IncludeContextInAITransform: BoolConfigItem {
+    /// Setting to keep the input in Latin letters until it is committed when it starts with an uppercase letter (Shift+letter),
+    /// as MS-IME and Google Japanese Input do. Off by default: a capital then starts a Latin word, and typing goes back to
+    /// kana after it (see `LatinInputGuess`). Without live conversion the input always behaves as if this were on.
+    public struct UppercaseStartsAlphabetInput: BoolConfigItem {
+        public init() {}
+        static let `default` = false
+        public static let key: String = "org.if0.inputmethod.ogura.preference.uppercaseStartsAlphabetInput"
+    }
+    /// Setting to offer the letters as typed as a conversion candidate when the input does not look like Japanese (see `LatinInputGuess`)
+    public struct LatinCandidateForNonJapaneseInput: BoolConfigItem {
         public init() {}
         static let `default` = true
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.includeContextInAITransform"
+        public static let key: String = "org.if0.inputmethod.ogura.preference.latinCandidateForNonJapaneseInput"
+    }
+    /// Setting to tell Latin words from romaji with the learned identification layer (see `TaggerScriptIdentifier`)
+    /// rather than the rules (`RuleBasedScriptIdentifier`). On trial
+    public struct LearnedScriptIdentification: BoolConfigItem {
+        public init() {}
+        static let `default` = false
+        public static let key: String = "org.if0.inputmethod.ogura.preference.learnedScriptIdentification"
     }
 }

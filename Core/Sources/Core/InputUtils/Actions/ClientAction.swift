@@ -8,18 +8,24 @@ public enum ClientAction {
     case appendToMarkedText(String)
     case appendPieceToMarkedText([InputPiece])
 
-    /// Marked Textを経由せずにインサートするコマンド。InputStateがnoneの場合のみ有効
+    /// Command that inserts text without going through marked text. Only valid when InputState is none
     case insertWithoutMarkedText(String)
     case removeLastMarkedText
+    /// Command that deletes one character of marked text to the right of the cursor (forward)
+    case removeForwardMarkedText
 
     case commitMarkedText
-    /// Shift+←→で選択範囲をエディットするコマンド
+    /// Commit the selected candidate, and commit the remaining segments with their top candidates (Enter in MS-IME)
+    case commitAllCandidates
+    /// Cancel the conversion and go back to typing hiragana (BackSpace after conversion in MS-IME)
+    case cancelConversion
+    /// Command that edits the selection range with Shift+Left/Right
     case editSegment(Int)
 
-    /// previwingに入るコマンド
+    /// Command that enters previewing
     case enterFirstCandidatePreviewMode
 
-    /// スペースを押して`.selecting`に入るコマンド
+    /// Command that enters `.selecting` when Space is pressed
     case enterCandidateSelectionMode
     case submitSelectedCandidate
     case selectNextCandidate
@@ -29,38 +35,22 @@ public enum ClientAction {
     case selectInputLanguage(InputLanguage)
     case commitMarkedTextAndSelectInputLanguage(InputLanguage)
 
-    /// MarkedTextを確定して、さらに追加で入力する
+    /// Commit the marked text, then type more input
     case commitMarkedTextAndAppendToMarkedText(String)
     case commitMarkedTextAndAppendPieceToMarkedText([InputPiece])
 
-    /// デバッグウィンドウを表示するコマンド
-    case enableDebugWindow
-    case disableDebugWindow
-
-    /// 学習のリセット
+    /// Reset learning
     case forgetMemory
 
-    // Fnキーでの変換
+    // Conversion with Fn keys
     case submitKatakanaCandidate
     case submitHiraganaCandidate
     case submitHankakuKatakanaCandidate
     case submitFullWidthRomanCandidate
     case submitHalfWidthRomanCandidate
 
-    // PredictiveSuggestion
-    case requestPredictiveSuggestion
+    // Accept a prediction candidate
     case acceptPredictionCandidate
-
-    // ReplaceSuggestion
-    case requestReplaceSuggestion
-    case selectNextReplaceSuggestionCandidate
-    case selectPrevReplaceSuggestionCandidate
-    case submitReplaceSuggestionCandidate
-    case hideReplaceSuggestionWindow
-
-    // Selected Text Transform
-    case showPromptInputWindow
-    case transformSelectedText(String, String)  // (selectedText, prompt)
 
     // Unicode Input (Shift+Ctrl+U)
     case enterUnicodeInputMode
@@ -71,6 +61,11 @@ public enum ClientAction {
     case submitSelectedCandidateAndEnterUnicodeInputMode
 
     case stopComposition
+
+    /// Ask the on-device model to continue the text to the left of the cursor
+    case requestContinuation
+    /// Commit the marked text first, then continue writing
+    case commitMarkedTextAndRequestContinuation
 }
 
 public enum ClientActionCallback {

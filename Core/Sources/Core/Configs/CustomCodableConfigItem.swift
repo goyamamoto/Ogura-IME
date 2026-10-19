@@ -1,6 +1,6 @@
 //
 //  LearningConfig.swift
-//  azooKeyMac
+//  Ogura
 //
 //  Created by miwa on 2024/04/27.
 //
@@ -40,7 +40,7 @@ extension CustomCodableConfigItem {
 }
 
 extension Config {
-    /// ライブ変換を有効化する設定
+    /// Setting for what the converter learns from (input and output, output only, or nothing)
     public struct Learning: CustomCodableConfigItem {
         public enum Value: String, Codable, Equatable, Hashable, Sendable {
             case inputAndOutput
@@ -61,7 +61,7 @@ extension Config {
 
         public init() {}
         static let `default`: Value = .inputAndOutput
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.learning"
+        public static let key: String = "org.if0.inputmethod.ogura.preference.learning"
     }
 }
 
@@ -105,9 +105,9 @@ extension Config {
         }
 
         public static let `default`: Value = .init(items: [
-            .init(word: "azooKey", reading: "あずーきー", hint: "アプリ")
+            .init(word: "Ogura", reading: "おぐら", hint: "アプリ")
         ])
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.user_dictionary_temporal2"
+        public static let key: String = "org.if0.inputmethod.ogura.preference.user_dictionary_temporal2"
     }
 
     public struct SystemUserDictionary: CustomCodableConfigItem {
@@ -123,12 +123,12 @@ extension Config {
         }
 
         public static let `default`: Value = .init(items: [])
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.system_user_dictionary"
+        public static let key: String = "org.if0.inputmethod.ogura.preference.system_user_dictionary"
     }
 }
 
 extension Config {
-    /// Zenzaiのパーソナライズ強度
+    /// Personalization strength for Zenzai
     public struct ZenzaiPersonalizationLevel: CustomCodableConfigItem {
         public enum Value: String, Codable, Equatable, Hashable, Sendable {
             case off
@@ -152,7 +152,7 @@ extension Config {
 
         public init() {}
         public static let `default`: Value = .normal
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.zenzai.personalization_level"
+        public static let key: String = "org.if0.inputmethod.ogura.preference.zenzai.personalization_level"
     }
 }
 
@@ -168,12 +168,12 @@ extension Config {
 
         public init() {}
         public static let `default`: Value = .default
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.input_style"
+        public static let key: String = "org.if0.inputmethod.ogura.preference.input_style"
     }
 }
 
 extension Config {
-    /// キーボードレイアウトの設定
+    /// Keyboard layout setting
     public struct KeyboardLayout: CustomCodableConfigItem {
         public enum Value: String, Codable, Equatable, Hashable, Sendable {
             case qwerty
@@ -203,27 +203,7 @@ extension Config {
 
         public init() {}
         public static let `default`: Value = .qwerty
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.keyboard_layout"
+        public static let key: String = "org.if0.inputmethod.ogura.preference.keyboard_layout"
     }
 
-    public struct AIBackendPreference: CustomCodableConfigItem {
-        public enum Value: String, Codable, Equatable, Hashable, Sendable {
-            case off = "Off"
-            case foundationModels = "Foundation Models"
-            case openAI = "OpenAI API"
-        }
-
-        public init() {}
-
-        public static var `default`: Value {
-            // Migration: If user had OpenAI API enabled, preserve that setting
-            let legacyKey = Config.Deprecated.EnableOpenAiApiKey.key
-            if let legacyValue = Config.object(forKey: legacyKey) as? Bool,
-               legacyValue {
-                return .openAI
-            }
-            return .off
-        }
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.aiBackend"
-    }
 }

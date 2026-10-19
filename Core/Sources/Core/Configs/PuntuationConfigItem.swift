@@ -11,7 +11,7 @@ extension Config {
 
         public init() {}
         public static let `default`: Value = .`kutenAndToten`
-        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.punctuation_style"
+        public static let key: String = "org.if0.inputmethod.ogura.preference.punctuation_style"
     }
 }
 
@@ -20,7 +20,7 @@ extension Config.PunctuationStyle {
         get {
             guard let data = Config.data(forKey: Self.key) else {
                 print(#file, #line, "data is not set yet")
-                // この場合、過去の設定を反映する
+                // In this case, use the old (deprecated) setting
                 return if Config.Deprecated.TypeCommaAndPeriod().value {
                     .periodAndComma
                 } else {

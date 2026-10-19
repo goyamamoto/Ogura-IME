@@ -65,8 +65,8 @@ public enum WindowPositioning {
             newWindowFrame.origin = Point(x: cursorLocation.x, y: cursorLocation.y - desiredSize.height - cursorHeight)
         }
 
-        // 横方向のクランプ。まず右端を screenRect 内に収め、
-        // ウィンドウが screenRect より広いなど、収まりきらない場合は最終的に minX へ寄せる。
+        // Horizontal clamping. First fit the right edge inside screenRect.
+        // If the window cannot fit (for example, it is wider than screenRect), align it to minX in the end.
         if newWindowFrame.maxX > screenRect.maxX {
             newWindowFrame.origin.x = screenRect.maxX - newWindowFrame.width
         }
@@ -74,8 +74,8 @@ public enum WindowPositioning {
             newWindowFrame.origin.x = screenRect.minX
         }
 
-        // 縦方向のクランプ。まず上端（maxY）を screenRect 内に収め、
-        // ウィンドウが screenRect より高いなど、収まりきらない場合は最終的に minY へ寄せる。
+        // Vertical clamping. First fit the top edge (maxY) inside screenRect.
+        // If the window cannot fit (for example, it is taller than screenRect), align it to minY in the end.
         if newWindowFrame.maxY > screenRect.maxY {
             newWindowFrame.origin.y = screenRect.maxY - newWindowFrame.height
         }

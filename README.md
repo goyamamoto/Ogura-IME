@@ -1,153 +1,92 @@
-# azooKey on macOS
+# Ogura
 
-[azooKey](https://github.com/ensan-hcl/azooKey)のmacOS版です。高精度なニューラルかな漢字変換エンジン「Zenzai」を導入した、オープンソースの日本語入力システムです。
+macOS 向けの日本語入力システムです。AI 技術の進歩を取り入れて、効率よく自然に日本語を入力できる環境を目指しています。特に、英語や専門用語の混じった文章を書くエンジニアや研究者を想定しています。[azooKey on macOS](https://github.com/azooKey/azooKey-Desktop) をベースにした個人プロジェクトです。キー操作は MS-IME との互換を重視しています。
 
-**現在アルファ版のため、動作は一切保証できません**。
+## コンセプト
+
+効率よく自然に入力できる環境のために、azooKey の変換エンジンが持つ変換の正確さと、MS-IME や Google 日本語入力（Mozc）のように長く使われてきた使い勝手を一つにまとめています。
+
+- **変換の正確さは azooKey から**: かな漢字変換には、azooKey のニューラル変換エンジン「Zenzai」を使います。辞書だけで変換する方式と違い、前の文脈も見て変換します。
+- **操作は MS-IME に合わせる**: 変換、文節の区切り直し、F6〜F10 や Ctrl+U/I/O などのキー操作を MS-IME に合わせています。Windows で身につけた操作がそのまま使えます。
+- **半角英字を自動で見分ける**: ローマ字入力のまま打った英単語、製品名、コードの名前を見分けて、半角英字のまま変換します。文の途中の語も、大文字から打った名前も英字のまま残ります（`kyouhagithubnipushsita` → 今日はGitHubにpushした、`korehaOguradesu` → これはOguraです）。英数モードに切り替える必要はありません。
+- **続きを書く**: さらに、書きかけの文の後ろでキーを一つ押すと、Mac の中の言語モデルが続きを書き足します。気に入れば Tab で本文に、違えばもう一度押して別の案。文章はどこにも送りません。
+
+**開発中です。** 個人で使いながら育てている段階で、動作は保証できません。
+
+## 特徴
+
+- **Zenzai による変換**: 端末内で動くニューラルかな漢字変換（[AzooKeyKanaKanjiConverter](https://github.com/azooKey/AzooKeyKanaKanjiConverter)）。変換プロフィール、履歴学習、ユーザ辞書、[Tuner](https://github.com/azooKey/Tuner) の個人最適化モデルに対応
+- **MS-IME 互換のキー操作**: Windows から来た人がそのまま使える。設定で macOS 標準の操作にも切り替え可能
+- **ライブ変換**
+- **機械学習で半角英字の自動識別**: ローマ字で打った英単語や製品名、文の途中で大文字から打った語を、学習したモデルが見分けて半角英字のまま変換する。日本語にも英単語にも読める語（`token` と「とけん」）は、変換エンジンの辞書と文脈に任せる。モデルは Mac の中で動き、1 打鍵あたり数ミリ秒。設定の「英単語とローマ字の見分けに学習モデルを使う」で有効にする（オフのときは規則で見分ける）。
+- **AZIK** などのローマ字テーブルのカスタマイズ
+- **続きを書く**: 書きかけの文の後ろで Shift+Tab を押すと、ローカル LLM（標準は macOS 26 の Apple Intelligence）が続きを書き足す。気に入れば Tab、違えばもう一度押して別の案
+- **ネットワークに出ない**: 通信するコードも権限も持たず、テストで固定
+
+### 半角英字の識別の仕組み
+
+ローマ字入力では、`token` が英単語か「とけん」か、`Sakeha` が Sake か「さけは」かを、キーだけから決める必要があります。Ogura はこれを、打ったキーの一つ一つに「ローマ字」「英単語の始まり」「英単語の続き」のどれかのラベルを付ける問題（系列ラベリング）として解きます。ラベルの付け方それぞれに点数を付け、最も良いものを選びます。
+
+- **何を見るか**: 前後の文字、大文字かどうか、ローマ字として読めるか、英単語らしい綴りか（文字の並びの統計）、知っている英単語や製品名か、その部分を日本語として読むとどんな語になるか
+- **どう学習したか**: 辞書から作った日本語文と、端末内の言語モデルに書かせた英単語交じりの日本語文を、さまざまなローマ字の打ち方で打った形にして学習しています。点数は線形モデル（semi-Markov CRF）と、それを補正する小さなニューラルネットワーク（双方向 LSTM）で計算します
+- **迷うとき**: 英単語とも日本語とも読める小文字の語は、その確からしさを付けてかな漢字変換エンジンに渡し、辞書と文脈で決めてもらいます
+
+手書きの評価用の文 70 文では、英字の範囲を正しく見分けた文は規則で 63 文、学習モデルで 70 文です。詳しくは [半角英字の識別](docs/latin-identification.md) を参照してください。
 
 ## 動作環境
 
-macOS 15で動作確認しています。macOS 14およびmacOS 26でも利用できますが、動作は検証していません。
+macOS 15 以降、Apple Silicon の Mac が必要です。「続きを書く」で Apple の端末内モデルを使うには macOS 26 以降が必要です。
 
-## リリース版インストール
+## インストール
 
-[Releases](https://github.com/ensan-hcl/azooKey-Desktop/releases)から`.pkg`ファイルをダウンロードして、インストールしてください。
+配布用のパッケージはまだ公開していません。ソースからビルドしてインストールします（[開発](docs/development.md)を参照）。pkg を受け取った場合は開いてインストールします（初めて入れたときはログアウトして再ログインすると入力ソースの一覧に出ます）。インストール後は次の手順で使えます。
 
-その後、以下の手順で利用できます。
+1. ビルドしたアカウントと別のアカウントで使う場合は、そのアカウントで `Tools/register_input_source.sh` を実行するか、ログアウトして再ログイン
+2. 「システム設定」>「キーボード」>「入力ソース」>「編集…」>「+」>「日本語」から Ogura を追加
+3. メニューバーの入力メニューから Ogura（「お」のアイコン）を選択
 
-- macOSからログアウトし、再ログイン
-- 「設定」>「キーボード」>「入力ソース」を編集>「+」ボタン>「日本語」>azooKeyを追加>完了
-- メニューバーアイコンからazooKeyを選択
+azooKey on macOS を使っていた場合、`Tools/migrate_from_azookey.sh` を一度実行すると設定と学習データを引き継げます。
 
-### Install with Homebrew
-または、Homebrewを用いてインストールすることもできます。
+## ドキュメント
 
-```bash
-brew install azooKey
-```
-この場合も上記のログアウト・再ログイン後の設定は必要です。
-アップグレードは以下のコマンドで実行できますが、再起動が必要になることがあります。
+- [使い方](docs/usage.md): キー操作と設定
+- [続きを書く](docs/continuation.md): 使い方、モデルの選び方、うまくいかないとき、仕組み
+- [半角英字の識別](docs/latin-identification.md): 英単語とローマ字の見分け方、学習データ、評価、苦手なこと
+- [データの扱い](docs/privacy.md): 入力した内容をどう扱うか（テストで固定している保証）
+- [開発](docs/development.md): ビルドとインストール、配布用 pkg、テスト、ツール
 
-```bash
-brew upgrade azooKey
-```
+## azooKey との関係
 
-## コミュニティ
+Ogura は azooKey on macOS（MIT ライセンス、Copyright (c) 2025 Miwa Keita）をベースに作った、独立したプロジェクトです。azooKey の公式版ではなく、azooKey プロジェクトとは別に開発しています。
 
-azooKey on macOSの開発に参加したい方、使い方に質問がある方、要望や不具合報告がある方は、ぜひ[azooKeyのDiscordサーバ](https://discord.gg/dY9gHuyZN5)にご参加ください。
+- **受け継いだもの**: かな漢字変換の中心である Zenzai と変換エンジン（AzooKeyKanaKanjiConverter）、そして入力メソッドの土台（キー入力の処理、候補ウィンドウ、ユーザ辞書、設定）。
+- **Ogura で目指していること**: 効率よく自然に日本語を入力できる環境です。特に、エンジニアや研究者が英語や専門用語の混じった文章を手間なく正確に入力できること。
+- **大切にしていること**: 文章を外部のサービスに送る機能は持たず、すべて Mac の中で処理します。
+- azooKey の変更を追いかけてはおらず、必要なものだけを個別に取り込んでいます。azooKey と同じ Mac に入れて併用できます。
 
+## 貢献について
 
-### azooKey on macOSを支援する
+個人プロジェクトとして不定期に開発しています。Issue や Pull Request は歓迎しますが、返答や取り込みに時間がかかることがあります。変換エンジン自体の改善は [AzooKeyKanaKanjiConverter](https://github.com/azooKey/AzooKeyKanaKanjiConverter) へ送るのが適切だと思います。
 
-GitHub Sponsorsをご利用ください。
+## ライセンス
 
+MIT License。azooKey on macOS 由来の部分は Copyright (c) 2025 Miwa Keita、Ogura の固有の部分は Copyright (c) Go Yamamoto です。詳細は `LICENSE` を参照してください。
 
-## 機能
+Zenzai のモデルと言語モデルは submodule として取り込んでおり、それぞれのリポジトリのライセンスに従います。
 
-* ニューラルかな漢字変換システム「Zenzai」による高精度な変換
-  * プロフィールプロンプト機能
-  * 履歴学習機能
-  * ユーザ辞書機能
-  * 個人最適化システム「[Tuner](https://github.com/azooKey/Tuner)」との連携機能
-* LLMによる「いい感じ変換」機能
-* ライブ変換
-* AZIKのネイティブサポート
+## 謝辞
 
+Ogura は azooKey on macOS と AzooKeyKanaKanjiConverter（Miwa Keita 氏ほか）なしには存在しません。azooKey on macOS は情報処理推進機構（IPA）の [2024年度未踏IT人材発掘・育成事業](https://www.ipa.go.jp/jinzai/mitou/it/2024/koubokekka.html) の支援を受けて開発されました。
 
-## 開発ガイド
+azooKey が参考にした資料（上流の README より）:
 
-コントリビュート歓迎です！！
+- [https://mzp.hatenablog.com/entry/2017/09/17/220320](https://mzp.hatenablog.com/entry/2017/09/17/220320)
+- [https://www.logcg.com/en/archives/2078.html](https://www.logcg.com/en/archives/2078.html)
+- [https://stackoverflow.com/questions/27813151/how-to-develop-a-simple-input-method-for-mac-os-x-in-swift](https://stackoverflow.com/questions/27813151/how-to-develop-a-simple-input-method-for-mac-os-x-in-swift)
+- [https://mzp.booth.pm/items/809262](https://mzp.booth.pm/items/809262)
 
-### 必要な環境
-* macOS 15+
-* Xcode 26.1+
-* Git LFS（必須。Hugging Face上のsubmoduleがLFSを利用しているため、未導入だとモデル重みが取得できません）
-* SwiftLint
+### azooKey の関連プロジェクト
 
-```bash
-brew install git-lfs swiftlint
-git lfs install
-```
-
-### 開発版のビルド・デバッグ
-
-#### 1. クローン
-
-submoduleにzenzのgguf重みと言語モデル（`.marisa`）が含まれるため、`--recursive`と Git LFS の有効化が必須です。
-
-```bash
-git lfs install        # 未実行の場合のみ
-git clone https://github.com/azooKey/azooKey-Desktop --recursive
-cd azooKey-Desktop
-```
-
-既にcloneしていてsubmoduleやLFSが揃っていない場合は以下を実行してください。
-
-```bash
-git submodule update --init
-git -C azooKeyMac/Resources/zenz-v3.1-small-gguf lfs pull
-git -C azooKeyMac/Resources/base_n5_lm lfs pull
-```
-
-重みファイルが正しく取得できているか、サイズで確認できます（数十MB以上あればLFSの実体、134B程度ならポインタのままです）。
-
-```bash
-ls -lh azooKeyMac/Resources/zenz-v3.1-small-gguf/ggml-model-Q5_K_M.gguf
-```
-
-#### 2. 署名の設定（初回のみ）
-
-`install.sh` はアーカイブビルドを行うため、Xcode上で署名設定が通っている必要があります。Apple Developer Programに加入していない場合は、Personal Teamでの署名に切り替えてください。
-
-* `azooKeyMac.xcodeproj` を Xcode で開く
-* azooKeyMac ターゲット → Signing & Capabilities で Team を自身の Personal Team に変更
-* リポジトリ内のバンドルID（`dev.ensan.inputmethod.azooKeyMac` など）を、自身の所有するプレフィックスに一括置換（例: `dev.yourname.inputmethod.azooKeyMac`）
-
-#### 3. ビルド＆インストール
-
-```bash
-./install.sh
-```
-
-`.pkg`によるインストールと同等の状態になります。その後、上記の「リリース版インストール」の手順（ログアウト→入力ソース追加）を行ってください。
-
-開発中はazooKeyのプロセスをkillすることで最新版を反映することが出来ます。また、必要に応じて入力ソースからazooKeyを削除して再度追加する、macOSからログアウトして再ログインするなど、リセットが必要になる場合があります。
-
-### 開発時のトラブルシューティング
-
-`install.sh`でビルドが成功しない場合、以下をご確認ください。
-
-* 署名エラーで失敗する場合は、上記「署名の設定」が完了しているかを確認してください（Team変更とバンドルID置換の両方が必要です）
-* 「Packages are not supported when using legacy build locations, but the current project has them enabled.」と表示される場合は[https://qiita.com/glassmonkey/items/3e8203900b516878ff2c](https://qiita.com/glassmonkey/items/3e8203900b516878ff2c)を参考に、Xcodeの設定をご確認ください
-* Xcode 26.0ではビルドできない可能性があります。Xcode 16系または26.1以降をご利用ください。
-
-変換精度がリリース版に比べて悪いと感じた場合、以下をご確認ください。
-* Git LFSが導入されていない環境では、重みファイルがローカル環境に落とせていない場合があります。`azooKeyMac/Resources/zenz-v3.1-small-gguf/ggml-model-Q5_K_M.gguf` が数十MB以上あるかを確認し、ポインタのままであれば `git -C azooKeyMac/Resources/zenz-v3.1-small-gguf lfs pull` を実行してください
-
-### pkgファイルの作成
-`pkgbuild.sh`によって配布用のdmgファイルを作成できます。`build/azooKeyMac.app` としてDeveloper IDで署名済みの.appを配置してください。
-
-### v1.0リリースに向けて
-[meta: v1.0のリリースに向けたロードマップ（#181）](https://github.com/azooKey/azooKey-Desktop/issues/181)をご覧ください．
-
-## Community Forks
-
-### [fcitx5-hazkey](https://github.com/7ka-Hiira/fcitx5-hazkey)
-@7ka-Hiira さんによるLinux系OS向けのクライアント実装です。
-
-### [azooKey-Windows](https://github.com/fkunn1326/azooKey-Windows)
-@fkunn1326 さんによるWindows向けクライアント実装です。
-
-### [azoo-key-skkserv](https://github.com/gitusp/azoo-key-skkserv)
-@gitusp さんによるSKKクライアント向けのSKKサーバ実装です。macOS向けGUIアプリケーションを含みます。
-
-## Reference
-
-Thanks to authors!!
-
-* https://mzp.hatenablog.com/entry/2017/09/17/220320
-* https://www.logcg.com/en/archives/2078.html
-* https://stackoverflow.com/questions/27813151/how-to-develop-a-simple-input-method-for-mac-os-x-in-swift
-* https://mzp.booth.pm/items/809262
-
-## Acknowledgement
-本プロジェクトは情報処理推進機構(IPA)による[2024年度未踏IT人材発掘・育成事業](https://www.ipa.go.jp/jinzai/mitou/it/2024/koubokekka.html)の支援を受けて開発を行いました。
+- [fcitx5-hazkey](https://github.com/7ka-Hiira/fcitx5-hazkey): Linux 向けクライアント
+- [azooKey-Windows](https://github.com/fkunn1326/azooKey-Windows): Windows 向けクライアント
+- [azoo-key-skkserv](https://github.com/gitusp/azoo-key-skkserv): SKK サーバ実装

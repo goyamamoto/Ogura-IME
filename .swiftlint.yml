@@ -1,40 +1,40 @@
 # document: https://github.com/realm/SwiftLint
 disabled_rules:
-  - line_length # 行の長さが気になる場合はエディタで折り返しを設定してください
-  - nesting # 型名のネストの深さを気にするのは非本質的
-  - file_length # ファイルの長さを気にするのは非本質的
-  - function_body_length # 関数の実装の長さを気にするのも非本質的
-  - type_body_length # 型の実装の長さを気にするのも非本質的
-  - todo # todoが書けない方が間違い
+  - line_length # If long lines bother you, turn on line wrapping in your editor
+  - nesting # How deeply types nest does not matter much
+  - file_length # File length does not matter much
+  - function_body_length # Function body length does not matter much either
+  - type_body_length # Type body length does not matter much either
+  - todo # Forbidding TODOs would be the mistake
 
 identifier_name:
   min_length: 1
-  max_length: 10000 # 長さ上限を無効化
+  max_length: 10000 # Effectively no length limit
   excluded: ["英数|かな"]
 
 type_name:
   min_length: 1
-  max_length: 10000 # 長さ上限を無効化
+  max_length: 10000 # Effectively no length limit
 
 analyzer_rules:
   - unused_import
   - unused_declaration
 
 opt_in_rules:
-  - implicit_return # implicit returnを推奨
-  - sorted_imports # importをsortする
-  - array_init # Array()を推奨
+  - implicit_return # Prefer implicit return
+  - sorted_imports # Keep imports sorted
+  - array_init # Prefer Array()
   - conditional_returns_on_newline
-  - empty_string # 同上
-  - explicit_init # explicitに.initを書かない
-  - first_where # .filter { }.firstよりも.first(where:)を用いる．
-  - operator_usage_whitespace # 演算子の左右に空白を
-  - redundant_nil_coalescing # ?? nilを禁止
-  - reduce_into # reduce(into:)を推奨
-  - toggle_bool # .toggleを推奨
+  - empty_string # Same as above
+  - explicit_init # Do not write .init explicitly
+  - first_where # Use .first(where:) instead of .filter { }.first
+  - operator_usage_whitespace # Put spaces around operators
+  - redundant_nil_coalescing # Disallow ?? nil
+  - reduce_into # Prefer reduce(into:)
+  - toggle_bool # Prefer .toggle()
 
 included:
-  - azooKeyMac
+  - Ogura
   - Core
 
 excluded:

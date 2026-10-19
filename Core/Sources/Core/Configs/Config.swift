@@ -2,33 +2,19 @@ import Foundation
 
 /// namespace for `Config`
 public enum Config {
-    nonisolated(unsafe) public static let userDefaults: UserDefaults = {
-        #if os(macOS)
-        UserDefaults(suiteName: AppGroup.azooKeyMacIdentifier) ?? .standard
-        #else
-        .standard
-        #endif
-    }()
+    /// Inside the sandbox this is the settings file in the app's own container (the App Group suite is not used)
+    nonisolated(unsafe) public static let userDefaults: UserDefaults = .standard
 
     public static func object(forKey key: String) -> Any? {
-        if let value = Self.userDefaults.object(forKey: key) {
-            return value
-        }
-        return UserDefaults.standard.object(forKey: key)
+        Self.userDefaults.object(forKey: key)
     }
 
     public static func data(forKey key: String) -> Data? {
-        if let value = Self.userDefaults.data(forKey: key) {
-            return value
-        }
-        return UserDefaults.standard.data(forKey: key)
+        Self.userDefaults.data(forKey: key)
     }
 
     public static func string(forKey key: String) -> String? {
-        if let value = Self.userDefaults.string(forKey: key) {
-            return value
-        }
-        return UserDefaults.standard.string(forKey: key)
+        Self.userDefaults.string(forKey: key)
     }
 
     public static func set(_ value: Any?, forKey key: String) {

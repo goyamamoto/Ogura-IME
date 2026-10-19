@@ -47,7 +47,7 @@ import Testing
     let manager = SegmentsManager(
         kanaKanjiConverter: .withDefaultDictionary(),
         applicationDirectoryURL: memoryURL,
-        containerURL: nil,
+        personalizationDirectoryURL: nil,
         context: .init(useZenzai: false)
     )
     manager.insertAtCursorPosition("こーしー", inputStyle: .direct)

@@ -10,15 +10,19 @@ let kanaKanjiConverterTraits: Set<Package.Dependency.Trait> = ["Zenzai"]
 let kanaKanjiConverterTraits: Set<Package.Dependency.Trait> = []
 #endif
 
-var products: [Product] = [
+let products: [Product] = [
     // Products define the executables and libraries a package produces, making them visible to other packages.
     .library(
         name: "Core",
         targets: ["Core"]
+    ),
+    .library(
+        name: "ContinuationMLX",
+        targets: ["ContinuationMLX"]
     )
 ]
 
-var targets: [Target] = [
+let targets: [Target] = [
     .executableTarget(
         name: "git-info-generator"
     ),
@@ -31,9 +35,7 @@ var targets: [Target] = [
         name: "Core",
         dependencies: [
             .product(name: "SwiftUtils", package: "AzooKeyKanaKanjiConverter"),
-            .product(name: "KanaKanjiConverterModuleWithDefaultDictionary", package: "AzooKeyKanaKanjiConverter"),
-            .product(name: "Crypto", package: "swift-crypto"),
-            .product(name: "ZIPFoundation", package: "ZIPFoundation")
+            .product(name: "KanaKanjiConverterModuleWithDefaultDictionary", package: "AzooKeyKanaKanjiConverter")
         ],
         swiftSettings: [.interoperabilityMode(.Cxx)],
         plugins: [
@@ -44,33 +46,32 @@ var targets: [Target] = [
         name: "CoreTests",
         dependencies: ["Core"],
         swiftSettings: [.interoperabilityMode(.Cxx)]
+    ),
+    // MLX backend for 「続きを書く」 ("continue writing"). Apple Silicon only. Core's own tests do not use it.
+    .target(
+        name: "ContinuationMLX",
+        dependencies: [
+            "Core",
+            .product(name: "MLXLLM", package: "mlx-swift-lm"),
+            .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+            .product(name: "Transformers", package: "swift-tokenizers")
+        ],
+        swiftSettings: [.interoperabilityMode(.Cxx)]
     )
 ]
 
-#if os(macOS)
-products.append(
-    .executable(
-        name: "ConverterServer",
-        targets: ["ConverterServer"]
-    )
-)
-targets.append(
-    .executableTarget(
-        name: "ConverterServer",
-        dependencies: ["Core"],
-        swiftSettings: [.interoperabilityMode(.Cxx)]
-    )
-)
-#endif
-
 let package = Package(
     name: "Core",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     products: products,
     dependencies: [
-        .package(url: "https://github.com/azooKey/AzooKeyKanaKanjiConverter", revision: "ad714fea8cb2fe113aea86ba5c42563cdaf77cfb", traits: kanaKanjiConverterTraits),
-        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
-        .package(url: "https://github.com/weichsel/ZIPFoundation.git", from: "0.9.0")
+        // A fork of azooKey/AzooKeyKanaKanjiConverter (ad714fe) with one addition: Zenzai's log-probability of a
+        // reading (zenzaiInputLogProbability), for keeping natural Japanese (SegmentsManager.keepingNaturalJapanese)
+        .package(url: "https://github.com/goyamamoto/AzooKeyKanaKanjiConverter", revision: "cd3cd71af9cd6e10de9dc9f9b0b7d98a5649ab88", traits: kanaKanjiConverterTraits),
+        // Turn off the FoundationModelsIntegration trait because it requires the macOS 27 SDK
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm", exact: "3.32.3", traits: []),
+        // Use the same tokenizer implementation as the conversion engine (a minimal version of huggingface/swift-transformers). This avoids a clash between modules with the same name.
+        .package(url: "https://github.com/ensan-hcl/swift-tokenizers", exact: "0.0.1")
     ],
     targets: targets
 )

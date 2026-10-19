@@ -2,8 +2,8 @@ import Core
 import Testing
 
 @Test func testh2z() async throws {
-    // 半角文字→全角文字
+    // Half-width character to full-width character
     #expect(KeyMap.h2zMap("¥") == "￥")
-    // 複数文字はサポートしない
+    // Multiple characters are not supported
     #expect(KeyMap.h2zMap("a") == nil)
 }
