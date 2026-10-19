@@ -38,7 +38,7 @@ private func committed(_ keys: String) -> String {
     }
     let manager = SegmentsManager(
         kanaKanjiConverter: KanaKanjiConverter.withDefaultDictionary(),
-        applicationDirectoryURL: testLearningDirectory,
+        applicationDirectoryURL: freshTestLearningDirectory(),
         personalizationDirectoryURL: nil,
         context: .init(
             useZenzai: true,

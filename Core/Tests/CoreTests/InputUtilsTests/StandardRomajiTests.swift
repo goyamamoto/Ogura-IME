@@ -13,11 +13,11 @@ private let hasZenzaiWeights = ((try? FileManager.default.attributesOfItem(
 @Test("標準的なローマ字（ヘボン式、訓令式、日本式、外来語の書き方）で書ける語と、書けない語を見分ける")
 func standardRomajiSpellsJapanese() {
     for word in ["mine", "token", "konnichiha", "konnnichiha", "shinbun", "kitte", "matcha", "maccha", "mattya", "sinbun",
-                 "tisshu", "firumu", "chekku", "jetto", "uindou", "wo", "n", "kyouha"] {
+                 "tisshu", "firumu", "chekku", "jetto", "uindou", "wo", "n", "kyouha", "e-tone", "ko-hi-"] {
         #expect(StandardRomaji.spells(word), "\(word)")
     }
     // c without h, l, x, q, tw: an input method reads them as kana, but no one writes Japanese so
-    for word in ["code", "care", "core", "cicada", "ele", "two", "ltu", "xa", "quick", "kitt", "thi", "cco"] {
+    for word in ["code", "care", "core", "cicada", "ele", "two", "ltu", "xa", "quick", "kitt", "thi", "cco", "-e", "e-mail"] {
         #expect(!StandardRomaji.spells(word), "\(word)")
     }
 }
@@ -36,7 +36,7 @@ private func committed(_ keys: String) -> String {
     }
     let manager = SegmentsManager(
         kanaKanjiConverter: KanaKanjiConverter.withDefaultDictionary(),
-        applicationDirectoryURL: testLearningDirectory,
+        applicationDirectoryURL: freshTestLearningDirectory(),
         personalizationDirectoryURL: nil,
         context: .init(
             useZenzai: true,

@@ -6,6 +6,7 @@
 //
 
 import Cocoa
+import ContinuationMLX
 import Core
 import InputMethodKit
 import KanaKanjiConverterModuleWithDefaultDictionary
@@ -34,13 +35,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var configWindowController: NSWindowController?
     var userDictionaryEditorWindowController: NSWindowController?
     let kanaKanjiConverter = KanaKanjiConverter.withDefaultDictionary()
+    /// The judge of readings the naturalness checks of Latin words use next to Zenzai (see `SegmentsManager.Context`),
+    /// loading in the background from the app's resources
+    let readingJudge: BackgroundReadingJudge? = Bundle.main.resourceURL
+        .map { $0.appendingPathComponent("ReadingJudge", isDirectory: true) }
+        .flatMap { FileManager.default.fileExists(atPath: $0.path) ? BackgroundReadingJudge(directory: $0) : nil }
     private let learningDataCommitScheduler = DebouncedActionScheduler()
     private static let learningDataCommitDelay: TimeInterval = 2
 
     @MainActor
     func scheduleLearningDataCommit() {
         learningDataCommitScheduler.schedule(after: Self.learningDataCommitDelay) { [weak self] in
-            self?.kanaKanjiConverter.commitUpdateLearningData()
+            ConversionLock.withLock {
+                self?.kanaKanjiConverter.commitUpdateLearningData()
+            }
         }
     }
 
@@ -84,10 +92,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func reloadUserDictionary(memoryDirectoryURL: URL) {
-        self.kanaKanjiConverter.updateUserDictionaryURL(
-            CompiledUserDictionaryStore.directoryURL(memoryDirectoryURL: memoryDirectoryURL),
-            forceReload: true
-        )
+        ConversionLock.withLock {
+            self.kanaKanjiConverter.updateUserDictionaryURL(
+                CompiledUserDictionaryStore.directoryURL(memoryDirectoryURL: memoryDirectoryURL),
+                forceReload: true
+            )
+        }
     }
 
     private static func buildSwiftUIWindow(
@@ -165,6 +175,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         learningDataCommitScheduler.cancel()
-        kanaKanjiConverter.commitUpdateLearningData()
+        ConversionLock.withLock {
+            kanaKanjiConverter.commitUpdateLearningData()
+        }
     }
 }

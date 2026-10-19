@@ -16,6 +16,13 @@ public protocol InputSessionHost: AnyObject {
     /// Context to the left and right of the cursor (read to improve conversion accuracy; never stored)
     func leftSideContext(maxCount: Int) -> String?
     func rightSideContext(maxCount: Int) -> String?
+    /// The conversion made in the background after a key changed what is shown, after the marked text was updated: the
+    /// host redraws what it draws from the session (the candidate window, for example)
+    func conversionDidUpdate()
+}
+
+extension InputSessionHost {
+    public func conversionDidUpdate() {}
 }
 
 /// Input session that does not depend on IMK.
@@ -62,6 +69,17 @@ public final class InputSession {
 
     private let settingsProvider: @MainActor () -> Settings
     private let now: @MainActor () -> TimeInterval
+    /// Runs the thorough conversion once typing stops (see `scheduleThoroughConversion`)
+    private let typingPauseScheduler: DebouncedActionScheduler
+    /// How long typing has to stop for the thorough conversion to be shown: longer than the time between keys while
+    /// typing, so that it runs when the input is likely to be committed
+    static let thoroughConversionDelay: TimeInterval = 0.2
+    /// The clock of `KeyEventCore.timestamp`
+    private let uptime: @MainActor () -> TimeInterval
+    /// When the thorough conversion was last shown, by `uptime`, until the next event
+    private var thoroughConversionShownAt: TimeInterval?
+    /// How long after the thorough conversion is shown it can be seen: the app draws it on its next frame
+    static let thoroughConversionVisibleAfter: TimeInterval = 0.05
 
     // Detects a double tap of the 英数 (Eisu) key
     private var lastKey: (time: TimeInterval, code: UInt16) = (0, 0)
@@ -79,14 +97,21 @@ public final class InputSession {
     /// The context the shown continuation was written for. Asking again while it is shown reuses it (see `requestContinuation`)
     var continuationContext: String?
 
+    /// - Parameters:
+    ///   - typingPauseScheduler: Runs work once typing stops; tests pass one that runs it when they say typing stopped.
+    ///   - uptime: The clock of the keys' timestamps (`KeyEventCore.timestamp`).
     public init(
         segmentsManager: SegmentsManager,
         settingsProvider: @escaping @MainActor () -> Settings = { .current },
-        now: @escaping @MainActor () -> TimeInterval = { Date().timeIntervalSince1970 }
+        now: @escaping @MainActor () -> TimeInterval = { Date().timeIntervalSince1970 },
+        typingPauseScheduler: DebouncedActionScheduler = DebouncedActionScheduler(),
+        uptime: @escaping @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.segmentsManager = segmentsManager
         self.settingsProvider = settingsProvider
         self.now = now
+        self.typingPauseScheduler = typingPauseScheduler
+        self.uptime = uptime
         self.segmentsManager.delegate = self
     }
 
@@ -119,7 +144,11 @@ public final class InputSession {
 
     public func deactivate() {
         self.cancelContinuation()
-        self.segmentsManager.deactivate(flushLearningData: false)
+        self.typingPauseScheduler.cancel()
+        self.segmentsManager.callOffThoroughConversion()
+        ConversionLock.withLock {
+            self.segmentsManager.deactivate(flushLearningData: false)
+        }
         self.inputState = .none
     }
 
@@ -127,6 +156,18 @@ public final class InputSession {
 
     /// Handle a key event. Returns true if the IME consumed it, false if it should go to the app.
     public func handle(_ event: KeyEventCore) -> Bool {
+        defer {
+            self.scheduleThoroughConversion()
+        }
+        // A key made up without a time (0, as some tools post them) is taken as pressed now
+        if let pressed = event.timestamp, pressed > 0, let shownAt = self.thoroughConversionShownAt,
+           pressed < shownAt + Self.thoroughConversionVisibleAfter, self.inputState == .composing,
+           self.segmentsManager.putBackConversionBeforeThorough() {
+            // The key was pressed while the thorough conversion was being made, before it could be seen (the main thread
+            // was busy with it): the key is for the conversion the user saw
+            self.host?.updateMarkedText(self.markedText)
+        }
+        self.thoroughConversionShownAt = nil
         let settings = self.settingsProvider()
         let userAction = UserAction.getUserAction(
             eventCore: event,
@@ -143,8 +184,10 @@ public final class InputSession {
 
         // Double tap of the 英数 (Eisu) key: commit the current input as half-width alphanumerics and switch to English mode
         if event.keyCode == Self.eisuKeyCode, self.checkAndUpdateDoubleTap(keyCode: event.keyCode), !self.segmentsManager.isEmpty {
-            _ = self.handleClientAction(.submitHalfWidthRomanCandidate, callback: .transition(.none), settings: settings)
-            self.switchInputLanguage(.english)
+            self.withSettledConversion {
+                _ = self.handleClientAction(.submitHalfWidthRomanCandidate, callback: .transition(.none), settings: settings)
+                self.switchInputLanguage(.english)
+            }
             return true
         }
 
@@ -155,11 +198,90 @@ public final class InputSession {
             liveConversionEnabled: settings.liveConversionEnabled,
             keyBindingStyle: settings.keyBindingStyle
         )
-        return self.handleClientAction(clientAction, callback: callback, settings: settings)
+        if Self.typesIntoInput(clientAction), self.segmentsManager.convertsTypingInBackground {
+            if self.pausesTyping() {
+                // Taken and dropped: the conversion is too far behind (a key held down)
+                return true
+            }
+            // Shown at once; the conversion of the input comes from the background (see `segmentsManagerDidUpdateDisplay`)
+            return self.handleClientAction(clientAction, callback: callback, settings: settings)
+        }
+        return self.withSettledConversion {
+            let handled = self.handleClientAction(clientAction, callback: callback, settings: settings)
+            if Self.typesIntoInput(clientAction) {
+                // Converted here: the start of a long input is committed now (in the background, when its conversion comes)
+                self.commitLongInputHead()
+            }
+            return handled
+        }
+    }
+
+    /// Commits the start of a long input on its own, as it is shown, up to a good place before the characters kept to
+    /// correct (see `SegmentsManager.longInputHead`)
+    private func commitLongInputHead() {
+        guard self.inputState == .composing, self.continuation == nil, let head = self.segmentsManager.longInputHead() else {
+            return
+        }
+        let leftSideContext = self.segmentsManager.getCleanLeftSideContext(maxCount: 30) ?? ""
+        self.host?.insertText(head.text)
+        ConversionLock.withLock {
+            self.segmentsManager.commitLongInputHead(head, leftSideContext: leftSideContext)
+        }
+        self.thoroughConversionShownAt = nil
+        self.host?.updateMarkedText(self.markedText)
+    }
+
+    /// Keys typed far faster than they convert for long (a key held down, repeating) would leave the conversion ever further
+    /// behind, the input growing and each conversion of it taking longer. Once this many characters of the reading show
+    /// unconverted (see `SegmentsManager.unconvertedCharacterCount`), the keys that type are dropped until the conversion
+    /// catches up to fewer than `typingResumesBelow`; the other keys work as ever
+    static let typingPausesAt = 16
+    static let typingResumesBelow = 4
+    /// Typing is paused (see `typingPausesAt`)
+    private var typingPaused = false
+
+    /// Whether the key that types is dropped (see `typingPausesAt`)
+    private func pausesTyping() -> Bool {
+        let unconverted = self.segmentsManager.unconvertedCharacterCount
+        if self.typingPaused, unconverted < Self.typingResumesBelow {
+            self.typingPaused = false
+        } else if !self.typingPaused, unconverted >= Self.typingPausesAt {
+            self.typingPaused = true
+        }
+        return self.typingPaused
+    }
+
+    /// Whether the action only types into the input, which can be shown before it is converted
+    private static func typesIntoInput(_ action: ClientAction) -> Bool {
+        switch action {
+        case .appendToMarkedText, .appendPieceToMarkedText:
+            true
+        default:
+            false
+        }
+    }
+
+    /// Runs `body` with the conversion of the input as it is now, nothing converting in the background meanwhile (see
+    /// `SegmentsManager.settleConversion`): what a key does with the conversion, it does with that of what was typed
+    private func withSettledConversion<Result>(_ body: () -> Result) -> Result {
+        self.segmentsManager.callOffThoroughConversion()
+        return ConversionLock.withLock {
+            self.segmentsManager.settleConversion()
+            return body()
+        }
     }
 
     /// Called when the OS asks to commit the marked text (a click or a focus change)
     public func commitComposition() {
+        defer {
+            self.scheduleThoroughConversion()
+        }
+        self.withSettledConversion {
+            self.commitCompositionSettled()
+        }
+    }
+
+    private func commitCompositionSettled() {
         self.cancelContinuation()
         // In Unicode input mode, only reset the state and return.
         // The IME cannot remove marked text that the OS has already committed.
@@ -178,12 +300,22 @@ public final class InputSession {
 
     /// Called when the input mode is changed from the menu bar or a shortcut
     public func inputModeDidChange(to language: InputLanguage) {
+        defer {
+            self.scheduleThoroughConversion()
+        }
+        self.withSettledConversion {
+            self.inputModeDidChangeSettled(to: language)
+        }
+    }
+
+    private func inputModeDidChangeSettled(to language: InputLanguage) {
         switch language {
         case .english:
-            // Switch to English input and keep the marked text
+            // Switch to English input and keep the marked text, shown as it will be committed (the reading)
             if self.inputLanguage == .japanese {
                 self.inputLanguage = .english
                 self.segmentsManager.stopJapaneseInput()
+                self.host?.updateMarkedText(self.markedText)
             }
         case .japanese:
             if self.inputLanguage == .english {
@@ -199,21 +331,63 @@ public final class InputSession {
         }
     }
 
-    /// A candidate was committed in the candidate window (by a click, for example)
+    /// A candidate was chosen in the candidate window (by a click, for example). With MS-IME key bindings it is chosen
+    /// for the clause and the next clause follows, as with a number key; otherwise it is committed
     public func submitCandidateFromWindow() {
-        self.submitSelectedCandidate()
-        self.inputState = self.segmentsManager.isEmpty ? .none : .previewing
-        self.host?.updateMarkedText(self.markedText)
+        defer {
+            self.scheduleThoroughConversion()
+        }
+        self.withSettledConversion {
+            if self.settingsProvider().keyBindingStyle == .msIME, self.inputState == .selecting {
+                self.segmentsManager.moveClauseFocus(count: 1)
+            } else {
+                self.submitSelectedCandidate()
+                self.inputState = self.segmentsManager.isEmpty ? .none : .previewing
+            }
+            self.host?.updateMarkedText(self.markedText)
+        }
     }
 
     /// The selected row in the candidate window changed
     public func selectCandidateRow(_ row: Int) {
-        self.segmentsManager.requestSelectingRow(row)
-        self.inputState = .selecting
-        self.host?.updateMarkedText(self.markedText)
+        defer {
+            self.scheduleThoroughConversion()
+        }
+        self.withSettledConversion {
+            self.segmentsManager.requestSelectingRow(row)
+            self.inputState = .selecting
+            self.host?.updateMarkedText(self.markedText)
+        }
     }
 
     // MARK: - Internal processing
+
+    /// Shows the thorough conversion once typing stops (see `SegmentsManager.showThoroughConversion`), so that Enter
+    /// commits it as it is shown. Called after each event: a key typed before then puts it off, and anything that leaves
+    /// the live conversion cancels it
+    private func scheduleThoroughConversion() {
+        guard self.inputState == .composing, self.segmentsManager.canShowThoroughConversion else {
+            self.typingPauseScheduler.cancel()
+            return
+        }
+        self.typingPauseScheduler.schedule(after: Self.thoroughConversionDelay) { [weak self] in
+            guard let self, self.inputState == .composing else {
+                return
+            }
+            // Made in the background when the conversions are, and shown when it comes (see `segmentsManagerDidUpdateDisplay`)
+            if self.segmentsManager.requestThoroughConversionInBackground() {
+                return
+            }
+            ConversionLock.withLock {
+                if self.segmentsManager.showThoroughConversion() {
+                    self.host?.updateMarkedText(self.markedText)
+                    self.thoroughConversionShownAt = self.uptime()
+                }
+                // Whether or not it changed what is shown, the start of a long input is committed in its form
+                self.commitLongInputHead()
+            }
+        }
+    }
 
     private func checkAndUpdateDoubleTap(keyCode: UInt16) -> Bool {
         let now = self.now()
@@ -232,9 +406,34 @@ public final class InputSession {
 
     private func submitCandidate(_ candidate: Candidate) {
         // Get the context before inserting
-        let cleanLeftSideContext = self.segmentsManager.getCleanLeftSideContext(maxCount: 30)
-        self.host?.insertText(candidate.text)
-        self.segmentsManager.prefixCandidateCommited(candidate, leftSideContext: cleanLeftSideContext ?? "")
+        let cleanLeftSideContext = self.segmentsManager.getCleanLeftSideContext(maxCount: 30) ?? ""
+        // The clauses moved past with → come before it
+        let earlierClauses = self.segmentsManager.takeEarlierClauses()
+        self.host?.insertText(earlierClauses + candidate.text)
+        self.segmentsManager.prefixCandidateCommited(candidate, leftSideContext: cleanLeftSideContext + earlierClauses)
+    }
+
+    /// Commits the input, or the selected clause, in the form of the function key (F6 hiragana … F10 half-width letters)
+    private func submitFunctionCandidate(_ function: UserAction.Function) {
+        let candidate = switch function {
+        case .six:
+            self.segmentsManager.getModifiedRubyCandidate(inputState: self.inputState) { $0.toHiragana() }
+        case .seven:
+            self.segmentsManager.getModifiedRubyCandidate(inputState: self.inputState) { $0.toKatakana() }
+        case .eight:
+            self.segmentsManager.getModifiedRubyCandidate(inputState: self.inputState) {
+                $0.toKatakana().applyingTransform(.fullwidthToHalfwidth, reverse: false)!
+            }
+        case .nine:
+            self.segmentsManager.getModifiedRomanCandidate(inputState: self.inputState) {
+                $0.applyingTransform(.fullwidthToHalfwidth, reverse: true)!
+            }
+        case .ten:
+            self.segmentsManager.getModifiedRomanCandidate(inputState: self.inputState) {
+                $0.applyingTransform(.fullwidthToHalfwidth, reverse: false)!
+            }
+        }
+        self.submitCandidate(candidate)
     }
 
     private func submitSelectedCandidate() {
@@ -276,6 +475,8 @@ public final class InputSession {
             self.host?.insertText(string)
         case .editSegment(let count):
             self.segmentsManager.editSegment(count: count)
+        case .moveCursor(let count):
+            self.segmentsManager.moveCursor(count: count)
         case .commitMarkedText:
             self.commitMarkedText()
         case .commitMarkedTextAndAppendToMarkedText(let string):
@@ -287,14 +488,26 @@ public final class InputSession {
         case .submitSelectedCandidate:
             self.submitSelectedCandidate()
         case .commitAllCandidates:
-            self.submitSelectedCandidate()
-            if !self.segmentsManager.isEmpty {
-                // Commit the remaining segments with their top candidates
-                let text = self.segmentsManager.commitMarkedText(inputState: .previewing)
-                self.host?.insertText(text)
+            // The clauses as shown, the ones moved past with → first
+            self.host?.insertText(self.segmentsManager.commitClauses())
+        case .moveClauseFocus(let count):
+            if self.inputState == .previewing {
+                // The clauses of the conversion shown
+                self.segmentsManager.update(requestRichCandidates: true)
             }
+            self.segmentsManager.moveClauseFocus(count: count)
+        case .selectNumberCandidateAndMoveToNextClause(let num):
+            let row = self.host?.candidateRow(forNumberKey: num) ?? (num - 1)
+            self.segmentsManager.requestSelectingRow(row)
+            self.segmentsManager.moveClauseFocus(count: 1)
         case .cancelConversion:
             self.segmentsManager.cancelConversion()
+        case .cancelConversionOrStopComposition:
+            if self.segmentsManager.hasReturnedToReading {
+                self.segmentsManager.stopComposition()
+            } else {
+                self.segmentsManager.cancelConversion()
+            }
         case .removeLastMarkedText:
             self.segmentsManager.deleteBackwardFromCursorPosition()
             self.segmentsManager.requestResettingSelection()
@@ -311,25 +524,22 @@ public final class InputSession {
             self.submitSelectedCandidate()
             self.segmentsManager.requestResettingSelection()
         case .submitHiraganaCandidate:
-            self.submitCandidate(self.segmentsManager.getModifiedRubyCandidate(inputState: self.inputState) {
-                $0.toHiragana()
-            })
+            self.submitFunctionCandidate(.six)
         case .submitKatakanaCandidate:
-            self.submitCandidate(self.segmentsManager.getModifiedRubyCandidate(inputState: self.inputState) {
-                $0.toKatakana()
-            })
+            self.submitFunctionCandidate(.seven)
         case .submitHankakuKatakanaCandidate:
-            self.submitCandidate(self.segmentsManager.getModifiedRubyCandidate(inputState: self.inputState) {
-                $0.toKatakana().applyingTransform(.fullwidthToHalfwidth, reverse: false)!
-            })
+            self.submitFunctionCandidate(.eight)
         case .submitFullWidthRomanCandidate:
-            self.submitCandidate(self.segmentsManager.getModifiedRomanCandidate(inputState: self.inputState) {
-                $0.applyingTransform(.fullwidthToHalfwidth, reverse: true)!
-            })
+            self.submitFunctionCandidate(.nine)
         case .submitHalfWidthRomanCandidate:
-            self.submitCandidate(self.segmentsManager.getModifiedRomanCandidate(inputState: self.inputState) {
-                $0.applyingTransform(.fullwidthToHalfwidth, reverse: false)!
-            })
+            self.submitFunctionCandidate(.ten)
+        case .applyFunction(let function):
+            if self.segmentsManager.isAlphabetWordInput {
+                // Letters typed as a word on purpose (see `isAlphabetWordInput`) are committed in the form, as before
+                self.submitFunctionCandidate(function)
+            } else {
+                self.segmentsManager.applyFunction(function, toWholeInput: self.inputState != .selecting)
+            }
         case .stopComposition:
             self.segmentsManager.stopComposition()
         case .forgetMemory:
@@ -376,6 +586,12 @@ public final class InputSession {
             self.inputState = inputState
         case .basedOnBackspace(let ifIsEmpty, let ifIsNotEmpty), .basedOnSubmitCandidate(let ifIsEmpty, let ifIsNotEmpty):
             self.inputState = self.segmentsManager.isEmpty ? ifIsEmpty : ifIsNotEmpty
+        case .basedOnRemainingInput(let ifIsEmpty, let ifIsNotEmpty):
+            let inputState = self.segmentsManager.isEmpty ? ifIsEmpty : ifIsNotEmpty
+            if inputState == .none {
+                self.switchInputLanguage(self.inputLanguage)
+            }
+            self.inputState = inputState
         }
 
         self.host?.updateMarkedText(self.markedText)
@@ -386,6 +602,18 @@ public final class InputSession {
 extension InputSession: SegmentManagerDelegate {
     public func getLeftSideContext(maxCount: Int) -> String? {
         self.host?.leftSideContext(maxCount: maxCount)
+    }
+
+    public func segmentsManagerDidUpdateDisplay(thoroughConversionShown: Bool) {
+        guard self.inputState == .composing else {
+            return
+        }
+        self.host?.updateMarkedText(self.markedText)
+        if thoroughConversionShown {
+            self.thoroughConversionShownAt = self.uptime()
+        }
+        self.commitLongInputHead()
+        self.host?.conversionDidUpdate()
     }
 
     public func getRightSideContext(maxCount: Int) -> String? {

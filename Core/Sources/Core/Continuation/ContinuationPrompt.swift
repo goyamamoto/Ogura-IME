@@ -342,17 +342,23 @@ public enum ContinuationPrompt {
         }
     }
 
-    /// Drops the surrounding whitespace, quotation marks, and thinking tags that models tend to add
+    /// Drops the surrounding whitespace, quotation marks, thinking tags and control tokens that models tend to add
     public static func clean(_ text: String) -> String {
         var result = text
-        // A reasoning model's <think>…</think> (if it is not closed, everything after it is still thinking)
-        if let open = result.range(of: "<think>") {
-            if let close = result.range(of: "</think>", range: open.upperBound ..< result.endIndex) {
-                result.removeSubrange(open.lowerBound ..< close.upperBound)
-            } else {
-                result.removeSubrange(open.lowerBound ..< result.endIndex)
+        // A reasoning model's thinking: <think>…</think>, or Gemma 4's <|channel>…<channel|> (if it is not closed, everything
+        // after it is still thinking)
+        for (open, close) in [("<think>", "</think>"), ("<|channel>", "<channel|>")] {
+            if let opened = result.range(of: open) {
+                if let closed = result.range(of: close, range: opened.upperBound ..< result.endIndex) {
+                    result.removeSubrange(opened.lowerBound ..< closed.upperBound)
+                } else {
+                    result.removeSubrange(opened.lowerBound ..< result.endIndex)
+                }
             }
         }
+        // A control token on its own (a closing marker without its opening, an end-of-turn marker decoded as text) is not
+        // prose
+        result = Self.removingControlTokens(result)
         result = result.trimmingCharacters(in: .whitespacesAndNewlines)
         for (open, close) in [("「", "」"), ("“", "”"), ("\"", "\""), ("**", "**")] where result.hasPrefix(open) && result.hasSuffix(close) && result.count >= open.count + close.count {
             result = String(result.dropFirst(open.count).dropLast(close.count))
@@ -360,5 +366,50 @@ public enum ContinuationPrompt {
         // Markdown emphasis marks are not needed in prose
         result = result.replacingOccurrences(of: "**", with: "")
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Whether `token`, as the vocabulary spells it, is a chat-format control token rather than text: the markers that
+    /// open and close turns, channels and thoughts (<|turn>, <turn|>, <|channel>, <channel|>, <|im_start|>, <think>,
+    /// </think>, <start_of_turn>, <end_of_turn>, <bos>, <eos>, …). A model given its own draft as the start of its reply
+    /// sometimes takes the draft for its thought, closes the channel and answers the request instead of going on; the
+    /// marker, decoded as text, then showed in the IME. Matched by shape, so that models not seen here are covered too:
+    /// a bracketed word with a bar on its inside edge, or one of the plain markers below
+    public static func isControlToken(_ token: String) -> Bool {
+        if Self.plainControlTokens.contains(token) {
+            return true
+        }
+        guard token.count >= 3, token.count <= 40, token.hasPrefix("<"), token.hasSuffix(">") else {
+            return false
+        }
+        let inside = token.dropFirst().dropLast()
+        guard inside.hasPrefix("|") || inside.hasSuffix("|") else {
+            return false
+        }
+        let name = inside.trimmingCharacters(in: CharacterSet(charactersIn: "|"))
+        return !name.isEmpty && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "_-./".contains($0)) }
+    }
+
+    private static let plainControlTokens: Set<String> = [
+        "<think>", "</think>", "<start_of_turn>", "<end_of_turn>", "<bos>", "<eos>", "<pad>", "<unk>", "<s>", "</s>"
+    ]
+
+    /// `text` without the control tokens (see `isControlToken`) written in it. Other text in angle brackets stays
+    static func removingControlTokens(_ text: String) -> String {
+        guard text.contains("<") else {
+            return text
+        }
+        var result = ""
+        var rest = Substring(text)
+        while let open = rest.firstIndex(of: "<") {
+            result += rest[..<open]
+            rest = rest[open...]
+            if let close = rest.firstIndex(of: ">"), Self.isControlToken(String(rest[...close])) {
+                rest = rest[rest.index(after: close)...]
+            } else {
+                result.append("<")
+                rest = rest.dropFirst()
+            }
+        }
+        return result + rest
     }
 }

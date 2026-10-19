@@ -24,7 +24,7 @@ private final class RecordingHost: InputSessionHost {
 private func committed(_ keys: String, halfWidthSymbols: Bool, learned: Bool = false) -> String {
     let manager = SegmentsManager(
         kanaKanjiConverter: KanaKanjiConverter.withDefaultDictionary(),
-        applicationDirectoryURL: testLearningDirectory,
+        applicationDirectoryURL: freshTestLearningDirectory(),
         personalizationDirectoryURL: nil,
         context: .init(
             useZenzai: false,

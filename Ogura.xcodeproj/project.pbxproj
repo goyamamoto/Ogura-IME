@@ -16,6 +16,10 @@
 		551434E82D576B6600A9B5CA /* lm_c_abc.marisa in Resources */ = {isa = PBXBuildFile; fileRef = 551434E12D576B6600A9B5CA /* lm_c_abc.marisa */; };
 		551434EA2D57A8AC00A9B5CA /* ggml-model-Q5_K_M.gguf in Resources */ = {isa = PBXBuildFile; fileRef = 551434E92D57A8AC00A9B5CA /* ggml-model-Q5_K_M.gguf */; };
 		7A5C0E202E9B4A0100D1C0DE /* ScriptModel in Resources */ = {isa = PBXBuildFile; fileRef = 7A5C0E1F2E9B4A0100D1C0DE /* ScriptModel */; };
+		7A5C0E222E9B4A0100D1C0DE /* ReadingJudge in Resources */ = {isa = PBXBuildFile; fileRef = 7A5C0E212E9B4A0100D1C0DE /* ReadingJudge */; };
+		7A5C0E242E9B4A0100D1C0DE /* Dictionary in Resources */ = {isa = PBXBuildFile; fileRef = 7A5C0E232E9B4A0100D1C0DE /* Dictionary */; };
+		7A5C0E262E9B4A0100D1C0DE /* genmai in Resources */ = {isa = PBXBuildFile; fileRef = 7A5C0E252E9B4A0100D1C0DE /* genmai */; };
+		7A5C0E282E9B4A0100D1C0DE /* Licenses in Resources */ = {isa = PBXBuildFile; fileRef = 7A5C0E272E9B4A0100D1C0DE /* Licenses */; };
 		554A26602DB37657003C5CFB /* Core in Frameworks */ = {isa = PBXBuildFile; productRef = 554A265F2DB37657003C5CFB /* Core */; };
 		55A1C0DE0000000000000001 /* ContinuationMLX in Frameworks */ = {isa = PBXBuildFile; productRef = 55A1C0DE0000000000000002 /* ContinuationMLX */; };
 		556C52FB2BAAAF7E00EB343F /* en.tiff in Resources */ = {isa = PBXBuildFile; fileRef = 556C52F92BAAAF7D00EB343F /* en.tiff */; };
@@ -56,6 +60,10 @@
 		551434E42D576B6600A9B5CA /* lm_u_xbc.marisa */ = {isa = PBXFileReference; lastKnownFileType = file; name = lm_u_xbc.marisa; path = base_n5_lm/lm_u_xbc.marisa; sourceTree = "<group>"; };
 		551434E92D57A8AC00A9B5CA /* ggml-model-Q5_K_M.gguf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "ggml-model-Q5_K_M.gguf"; path = "gguf/ggml-model-Q5_K_M.gguf"; sourceTree = "<group>"; };
 		7A5C0E1F2E9B4A0100D1C0DE /* ScriptModel */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ScriptModel; sourceTree = "<group>"; };
+		7A5C0E212E9B4A0100D1C0DE /* ReadingJudge */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ReadingJudge; sourceTree = "<group>"; };
+		7A5C0E232E9B4A0100D1C0DE /* Dictionary */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Dictionary; sourceTree = "<group>"; };
+		7A5C0E252E9B4A0100D1C0DE /* genmai */ = {isa = PBXFileReference; lastKnownFileType = folder; path = genmai; sourceTree = "<group>"; };
+		7A5C0E272E9B4A0100D1C0DE /* Licenses */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Licenses; sourceTree = "<group>"; };
 		556C52F92BAAAF7D00EB343F /* en.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = en.tiff; sourceTree = "<group>"; };
 		556C52FA2BAAAF7D00EB343F /* en@2x.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = "en@2x.tiff"; sourceTree = "<group>"; };
 		55A27D012BAAADDB00512DCD /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
@@ -150,6 +158,10 @@
 				551434E42D576B6600A9B5CA /* lm_u_xbc.marisa */,
 				551434E92D57A8AC00A9B5CA /* ggml-model-Q5_K_M.gguf */,
 				7A5C0E1F2E9B4A0100D1C0DE /* ScriptModel */,
+				7A5C0E212E9B4A0100D1C0DE /* ReadingJudge */,
+				7A5C0E232E9B4A0100D1C0DE /* Dictionary */,
+				7A5C0E252E9B4A0100D1C0DE /* genmai */,
+				7A5C0E272E9B4A0100D1C0DE /* Licenses */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -290,6 +302,10 @@
 				55A27D022BAAADDB00512DCD /* InfoPlist.strings in Resources */,
 				551434EA2D57A8AC00A9B5CA /* ggml-model-Q5_K_M.gguf in Resources */,
 				7A5C0E202E9B4A0100D1C0DE /* ScriptModel in Resources */,
+				7A5C0E222E9B4A0100D1C0DE /* ReadingJudge in Resources */,
+				7A5C0E242E9B4A0100D1C0DE /* Dictionary in Resources */,
+				7A5C0E262E9B4A0100D1C0DE /* genmai in Resources */,
+				7A5C0E282E9B4A0100D1C0DE /* Licenses in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -511,7 +527,7 @@
 				);
 				LLVM_LTO = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = org.if0.inputmethod.ogura;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -546,7 +562,7 @@
 				);
 				LLVM_LTO = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = org.if0.inputmethod.ogura;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -572,7 +588,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = org.if0.inputmethod.ogura.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -599,7 +615,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = org.if0.inputmethod.ogura.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -623,7 +639,7 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = org.if0.inputmethod.ogura.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -646,7 +662,7 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = org.if0.inputmethod.ogura.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;

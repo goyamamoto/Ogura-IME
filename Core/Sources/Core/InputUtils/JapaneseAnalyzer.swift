@@ -3,8 +3,8 @@ import KanaKanjiConverterModuleWithDefaultDictionary
 
 /// Morphological analysis of the input read as Japanese romaji, by the converter's dictionary and connection costs (its
 /// lattice), without Zenzai. The script tagger reads how well each key fits a Japanese word: hoteru reads as one known
-/// word (ホテル), while apocalypse leaves letters no word covers.
-@MainActor
+/// word (ホテル), while apocalypse leaves letters no word covers. It converts, so it runs where the conversion runs (see
+/// `ConversionLock`)
 final class JapaneseAnalyzer {
     /// A word of the best reading of the input as Japanese
     struct Word {

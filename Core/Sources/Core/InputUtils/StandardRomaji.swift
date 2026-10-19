@@ -23,16 +23,21 @@ enum StandardRomaji {
     }()
 
     /// Whether `word`, in lower-case letters, is Japanese in standard romaji: syllables, with ん written n (before a
-    /// consonant or at the end) or nn, and っ written by doubling the consonant after it (kitte; matcha, maccha)
-    static func spells(_ word: some StringProtocol) -> Bool {
+    /// consonant or at the end) or nn, っ written by doubling the consonant after it (kitte; matcha, maccha), and ー
+    /// written - after a syllable (e-to)
+    static func spells(_ word: some Sequence<Character>) -> Bool {
         let letters = Array(word)
         var reachable = Array(repeating: false, count: letters.count + 1)
         reachable[0] = true
         for start in letters.indices where reachable[start] {
+            let letter = letters[start]
+            if letter == "-" {
+                reachable[start + 1] = start > 0
+                continue
+            }
             for length in 1 ... min(3, letters.count - start) where self.syllables.contains(String(letters[start ..< start + length])) {
                 reachable[start + length] = true
             }
-            let letter = letters[start]
             let next = start + 1 < letters.count ? letters[start + 1] : nil
             if letter == "n" {
                 if next == "n" {

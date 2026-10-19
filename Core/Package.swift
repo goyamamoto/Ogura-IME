@@ -44,10 +44,12 @@ let targets: [Target] = [
     ),
     .testTarget(
         name: "CoreTests",
-        dependencies: ["Core"],
+        // ContinuationMLX for the reading judge the Latin evaluation can add to the naturalness checks
+        dependencies: ["Core", "ContinuationMLX"],
         swiftSettings: [.interoperabilityMode(.Cxx)]
     ),
-    // MLX backend for 「続きを書く」 ("continue writing"). Apple Silicon only. Core's own tests do not use it.
+    // MLX backend for 「続きを書く」 ("continue writing"), and the reading judge of the naturalness checks of Latin words
+    // (CoreMLReadingJudge, Core ML). Apple Silicon only. Core's tests use it only in the Latin evaluation.
     .target(
         name: "ContinuationMLX",
         dependencies: [
@@ -65,9 +67,16 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: products,
     dependencies: [
-        // A fork of azooKey/AzooKeyKanaKanjiConverter (ad714fe) with one addition: Zenzai's log-probability of a
-        // reading (zenzaiInputLogProbability), for keeping natural Japanese (SegmentsManager.keepingNaturalJapanese)
-        .package(url: "https://github.com/goyamamoto/AzooKeyKanaKanjiConverter", revision: "cd3cd71af9cd6e10de9dc9f9b0b7d98a5649ab88", traits: kanaKanjiConverterTraits),
+        // A fork of azooKey/AzooKeyKanaKanjiConverter (ad714fe), branch ogura, with these additions: Zenzai's
+        // log-probability of a reading (zenzaiInputLogProbability), for keeping natural Japanese
+        // (SegmentsManager.keepingNaturalJapanese); a per-word flag that keeps a word out of the learning
+        // (DicdataElementMetadata.isNotLearningTarget), for the forms made with F6-F10 (SegmentsManager.applyFunction);
+        // flash attention off for models that need single precision, by GGUF metadata; scoring with a model other than
+        // the conversion's (getScoringModel); choosing among whole candidates by probability and a thorough conversion
+        // for committing (ZenzaiMode.thorough); a supplementary dictionary (supplementaryDictionaryURL); rendaku
+        // lookups; and calling a conversion off while it runs (ZenzaiMode.Cancellation), for the thorough conversion made
+        // in the background
+        .package(url: "https://github.com/goyamamoto/AzooKeyKanaKanjiConverter", revision: "8fa550f12add182639a92419a40da78e93c9c913", traits: kanaKanjiConverterTraits),
         // Turn off the FoundationModelsIntegration trait because it requires the macOS 27 SDK
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", exact: "3.32.3", traits: []),
         // Use the same tokenizer implementation as the conversion engine (a minimal version of huggingface/swift-transformers). This avoids a clash between modules with the same name.

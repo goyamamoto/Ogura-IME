@@ -44,7 +44,7 @@ struct MSIMEKeyBindingTests {
             return
         }
         guard case .navigation(.right) = self.action("n", .msIME) else {
-            Issue.record("Ctrl+N should commit the first segment, got \(self.action("n", .msIME))")
+            Issue.record("Ctrl+N should move to the next clause, got \(self.action("n", .msIME))")
             return
         }
     }
@@ -169,7 +169,7 @@ struct MSIMEKeyBindingTests {
     func cancelConversionRestoresHiragana() {
         let manager = SegmentsManager(
             kanaKanjiConverter: KanaKanjiConverter.withDefaultDictionary(),
-            applicationDirectoryURL: testLearningDirectory,
+            applicationDirectoryURL: freshTestLearningDirectory(),
             personalizationDirectoryURL: nil,
             context: .init(useZenzai: false)
         )

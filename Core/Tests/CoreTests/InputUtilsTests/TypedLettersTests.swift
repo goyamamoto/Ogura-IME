@@ -96,3 +96,23 @@ import Testing
     let word = Candidate(text: "機会", value: -9, composingCount: .inputCount(5), lastMid: 30, data: [DicdataElement(word: "機会", ruby: "キカイ", cid: 1285, mid: 30, value: -9)])
     #expect(SegmentsManager.learnedAsOnePhrase(word).data == word.data)
 }
+
+@Test func testLettersRightAfterANumberAreTheUnitTheNumberWasReadWith() {
+    // 45km for よんじゅうごきろめーとる: the letters write the unit the number was read with, not a word in letters
+    #expect(!SegmentsManager.writesUntypedLetters("約45kmを歩く", typed: "yakuyonjuugokiromeetoruwoaruku"))
+    #expect(!SegmentsManager.writesUntypedLetters("容量は3GBです", typed: "youryouhasangigabaitodesu"))
+    // A unit with no number before it is a word in letters
+    #expect(SegmentsManager.writesUntypedLetters("数kmを歩く", typed: "suukiromeetoruwoaruku"))
+    func element(_ word: String, _ ruby: String) -> DicdataElement {
+        DicdataElement(word: word, ruby: ruby, cid: CIDData.固有名詞.cid, mid: MIDData.一般.mid, value: -8)
+    }
+    func candidate(_ data: [DicdataElement]) -> Candidate {
+        Candidate(text: data.map(\.word).joined(), value: -30, composingCount: .inputCount(17), lastMid: MIDData.一般.mid, data: data)
+    }
+    // The number and the unit as one word of the dictionary, and as two
+    #expect(!SegmentsManager.writesUntypedLetters(candidate([element("約", "ヤク"), element("45km", "ヨンジュウゴキロメートル")]), typed: "yakuyonjuugokiromeetoru"))
+    #expect(!SegmentsManager.writesUntypedLetters(candidate([element("約", "ヤク"), element("45", "ヨンジュウゴ"), element("km", "キロメートル")]), typed: "yakuyonjuugokiromeetoru"))
+    let alone = candidate([element("数", "スウ"), element("km", "キロメートル")])
+    #expect(SegmentsManager.writesUntypedLetters(alone, typed: "suukiromeetoru"))
+    #expect(SegmentsManager.writingReadings(of: alone, typed: "suukiromeetoru")?.text == "数キロメートル")
+}

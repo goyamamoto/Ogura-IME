@@ -51,7 +51,7 @@ private func knownWord(_ input: String) -> String? {
 @Test func latinCandidateAppearsWhenConverting() {
     let manager = SegmentsManager(
         kanaKanjiConverter: KanaKanjiConverter.withDefaultDictionary(),
-        applicationDirectoryURL: testLearningDirectory,
+        applicationDirectoryURL: freshTestLearningDirectory(),
         personalizationDirectoryURL: nil,
         context: .init(useZenzai: false)
     )
@@ -80,5 +80,14 @@ private func knownWord(_ input: String) -> String? {
     // A capital starts a word, so these run into one from the Japanese before it
     #expect(LatinInputGuess.systemKnownWord("haWindows") == nil)
     #expect(LatinInputGuess.systemKnownWord("haMac") == nil)
+}
+
+@MainActor
+@Test("スペルチェッカーが判定しない 73 文字以上の入力は、英語の語として扱わない")
+func systemKnownWordLeavesOutLongInput() {
+    let sentence = "watashihasemetemonokokoroyarinikoishiwohirotteananiireruyouninatteshimatta"
+    #expect(sentence.count > LatinInputGuess.longestCheckedWord)
+    #expect(LatinInputGuess.systemKnownWord(sentence) == nil)
+    #expect(LatinInputGuess.systemKnownWord(String(sentence.prefix(LatinInputGuess.longestCheckedWord))) == nil)
 }
 #endif

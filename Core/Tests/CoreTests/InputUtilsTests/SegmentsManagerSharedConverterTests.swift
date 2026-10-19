@@ -9,7 +9,7 @@ import Testing
     func makeManager() -> SegmentsManager {
         SegmentsManager(
             kanaKanjiConverter: converter,
-            applicationDirectoryURL: testLearningDirectory,
+            applicationDirectoryURL: freshTestLearningDirectory(),
             personalizationDirectoryURL: nil,
             context: .init(useZenzai: false)
         )

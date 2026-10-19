@@ -192,4 +192,45 @@ struct ContinuationHelpersTests {
         #expect(ContinuationPrompt.clean("今日は**とても**晴れ。") == "今日はとても晴れ。")
         #expect(ContinuationPrompt.userPrompt(leftContext: "今日は").hasSuffix("今日は"))
     }
+
+    @Test("出力の掃除: チャット形式の制御トークンを落とし、ほかの角括弧は残す")
+    func promptCleanStripsControlTokens() {
+        #expect(ContinuationPrompt.clean("<channel|>今日は山本さんに会います。") == "今日は山本さんに会います。")
+        #expect(ContinuationPrompt.clean("<|channel>考え中<channel|>明日は晴れる。") == "明日は晴れる。")
+        #expect(ContinuationPrompt.clean("<|channel>まだ考え中").isEmpty)
+        #expect(ContinuationPrompt.clean("明日は晴れる。<turn|>") == "明日は晴れる。")
+        #expect(ContinuationPrompt.clean("a < b で、b > c です。") == "a < b で、b > c です。")
+        #expect(ContinuationPrompt.clean("<div>タグ</div>は残す") == "<div>タグ</div>は残す")
+    }
+
+    @Test("制御トークンの形: 括弧の内側の縁に縦棒がある語か、決まった印")
+    func controlTokenShape() {
+        for token in ["<|turn>", "<turn|>", "<|channel>", "<channel|>", "<|im_start|>", "<|im_end|>", "<|eot_id|>", "<think>", "</think>", "<start_of_turn>", "<end_of_turn>", "<eos>"] {
+            #expect(ContinuationPrompt.isControlToken(token), "\(token)")
+        }
+        for token in ["<unused0>", "<div>", "<a|b>", "<|>", "||", "今日", "<|空 白|>", "<" + String(repeating: "x", count: 50) + "|>"] {
+            #expect(!ContinuationPrompt.isControlToken(token), "\(token)")
+        }
+    }
+
+    @MainActor
+    @Test("制御トークンの形や記号だけの出力は壊れている。句点だけや英字の語は許す")
+    func controlTokenLookalikesAreBroken() {
+        let context = "酒は酒です。\n仕事します\nごとします。\n\n導きます。"
+        #expect(InputSession.brokenContinuationReason("<|\"|>}", after: context) == "制御トークンの形")
+        #expect(InputSession.brokenContinuationReason("））", after: context) == "記号だけ")
+        #expect(InputSession.brokenContinuationReason("。", after: "変換のやり直しが効くと随分と楽になります") == nil)
+        #expect(InputSession.brokenContinuationReason("Windows", after: "使うのは") == nil)
+        #expect(InputSession.brokenContinuationReason("これで完了です。", after: context) == nil)
+    }
+
+    @MainActor
+    @Test("短い語尾は、文脈のどこかにあっても言い直しとはしない")
+    func shortEndingIsNotARepetition() {
+        let context = "公園で講演会をするのはちょっと恥ずかしいです。\n\n講演会を公園でするのはちょっと恥ずかしい"
+        #expect(InputSession.removingRepeatedPrefix(from: "です。", after: context) == "です。")
+        #expect(InputSession.removingRepeatedPrefix(from: "恥ずかしいです。", after: context) == "です。", "文脈の末尾との重なりは落とす")
+        #expect(InputSession.removingRepeatedPrefix(from: "公園で講演会をするのはちょっと恥ずかしいです。", after: context).isEmpty, "一文の丸写しは落とす")
+        #expect(InputSession.removingRepeatedPrefix(from: "恥ずかしい", after: context).isEmpty, "末尾をなぞっている途中は空")
+    }
 }

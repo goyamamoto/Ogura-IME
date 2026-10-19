@@ -9,7 +9,7 @@ import Testing
 private func makeManager(uppercaseStartsAlphabetInput: Bool = true) -> SegmentsManager {
     SegmentsManager(
         kanaKanjiConverter: KanaKanjiConverter.withDefaultDictionary(),
-        applicationDirectoryURL: testLearningDirectory,
+        applicationDirectoryURL: freshTestLearningDirectory(),
         personalizationDirectoryURL: nil,
         context: .init(useZenzai: false, liveConversionEnabled: true, uppercaseStartsAlphabetInput: uppercaseStartsAlphabetInput)
     )

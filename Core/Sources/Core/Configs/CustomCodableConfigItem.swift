@@ -154,6 +154,21 @@ extension Config {
         public static let `default`: Value = .normal
         public static let key: String = "org.if0.inputmethod.ogura.preference.zenzai.personalization_level"
     }
+
+    /// The Zenzai model the conversion uses
+    public struct ZenzaiModel: CustomCodableConfigItem {
+        public enum Value: String, Codable, Equatable, Hashable, Sendable {
+            /// zenz-v3.2-small
+            case zenz
+            /// genmai, a fine-tune of zenz-v2.5-medium about three times as large as zenz-v3.2-small: more accurate,
+            /// slower. zenz-v3.2-small when the resources have no genmai (see Tools/build_genmai_gguf.sh)
+            case genmai
+        }
+
+        public init() {}
+        public static let `default`: Value = .genmai
+        public static let key: String = "org.if0.inputmethod.ogura.preference.zenzai.model"
+    }
 }
 
 extension Config {

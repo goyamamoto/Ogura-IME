@@ -1,0 +1,83 @@
+# Build the distributable pkg on GitHub's macOS runners: the same ./pkgbuild.sh --unsigned as on a developer's Mac
+# (ad-hoc signed app in an unsigned pkg; see docs/development.md for how users install it).
+#
+# - Run it by hand from the Actions tab: the pkg is attached to the run as an artifact.
+# - Push a tag v<version>: the pkg is also attached to a DRAFT release of that tag, to be reviewed and published by hand.
+#
+# The genmai GGUF is not in the repository: Tools/build_genmai_gguf.sh downloads it from this repository's release
+# genmai-0.1.1-gguf and checks its SHA-256.
+name: Release package
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  pkg:
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the build number is the number of commits in the history
+          submodules: recursive
+
+      - name: Fetch the model weights of the submodules (Git LFS)
+        run: |
+          git submodule foreach --recursive 'git lfs pull'
+          ls -l Ogura/Resources/gguf/ggml-model-Q5_K_M.gguf Ogura/Resources/base_n5_lm/
+
+      - name: Select the newest Xcode 26
+        run: |
+          latest="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -n "$latest" ]; then sudo xcode-select -s "$latest"; fi
+          xcodebuild -version
+          if ! xcrun metal -v > /dev/null 2>&1; then xcodebuild -downloadComponent MetalToolchain; fi
+          xcrun metal -v
+
+      - name: Fetch the genmai GGUF
+        run: Tools/build_genmai_gguf.sh
+
+      # The supplementary dictionary is built, not committed: Mozc's nouns that the converter's bundled dictionary lacks,
+      # in the converter's format, so it needs a checkout of the converter fork at the revision Core/Package.swift pins
+      - name: Build the supplementary dictionary
+        run: |
+          rev="$(sed -n 's|.*github.com/goyamamoto/AzooKeyKanaKanjiConverter[^"]*", revision: "\([0-9a-f]*\)".*|\1|p' Core/Package.swift | head -1)"
+          test -n "$rev"
+          git clone -q https://github.com/goyamamoto/AzooKeyKanaKanjiConverter "$RUNNER_TEMP/converter"
+          git -C "$RUNNER_TEMP/converter" checkout -q "$rev"
+          git -C "$RUNNER_TEMP/converter" submodule update -q --init --recursive
+          Tools/build_supplement_dictionary.sh "$RUNNER_TEMP/converter" "$RUNNER_TEMP/supplement"
+          ls Ogura/Resources/Dictionary/supplement | wc -l
+
+      - name: Build the package
+        run: ./pkgbuild.sh --unsigned
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ogura-pkg
+          path: build/pkg/Ogura-*-unsigned.pkg
+          if-no-files-found: error
+
+      - name: Draft a release for the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # A rebuild of the same tag replaces the package of its draft; a published release is never changed
+        run: |
+          draft="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null || echo none)"
+          case "$draft" in
+            none)
+              gh release create "$GITHUB_REF_NAME" build/pkg/Ogura-*-unsigned.pkg \
+                --draft --title "Ogura ${GITHUB_REF_NAME#v}" --notes-file .github/release-notes.md ;;
+            true)
+              gh release upload "$GITHUB_REF_NAME" build/pkg/Ogura-*-unsigned.pkg --clobber
+              gh release edit "$GITHUB_REF_NAME" --notes-file .github/release-notes.md ;;
+            *)
+              echo "The release $GITHUB_REF_NAME is already published; push a new tag for a new build" >&2
+              exit 1 ;;
+          esac

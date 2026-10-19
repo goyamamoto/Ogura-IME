@@ -199,11 +199,29 @@ public enum LatinInputGuess {
         return word
     }
 
+    /// `systemKnownWord` where the spell checker can be asked, on the main thread (NSSpellChecker is the main thread's);
+    /// elsewhere no word is known. The conversions off the main thread are those of the learned identification layer,
+    /// which does not ask it (see `SegmentsManager.convertsInBackground`)
+    public static func systemKnownWordOnMainThread(_ input: String) -> String? {
+        guard Thread.isMainThread else {
+            return nil
+        }
+        return MainActor.assumeIsolated {
+            Self.systemKnownWord(input)
+        }
+    }
+
     /// Words looked up while typing, so the spell checker is asked about each part of the input only once
     @MainActor private static var knownWordCache: [String: String?] = [:]
 
+    /// The longest input the spell checker judges: from 73 characters on it reports no misspelling, whatever the letters
+    static let longestCheckedWord = 72
+
     @MainActor
     private static func lookUpKnownWord(_ input: String) -> String? {
+        guard input.count <= Self.longestCheckedWord else {
+            return nil
+        }
         if input.dropFirst().contains(where: \.isUppercase) {
             // The spell checker accepts any word with a capital inside (it takes haWindows for a name like iPhone),
             // so check the letters in lower case

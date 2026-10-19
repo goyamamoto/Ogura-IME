@@ -14,7 +14,6 @@ private let hasZenzaiWeights = ((try? FileManager.default.attributesOfItem(
 )[.size] as? Int) ?? 0) > 1_000_000
 
 /// An identification layer with a fixed answer
-@MainActor
 private struct FixedScriptIdentifier: ScriptIdentifier {
     var segmentation: ScriptSegmentation
     func segment(_ input: TypedInput) -> ScriptSegmentation {
@@ -24,7 +23,6 @@ private struct FixedScriptIdentifier: ScriptIdentifier {
 
 /// An identification layer that grows surer of a word typed first once more follows (token once を送って follows):
 /// unlikely while fewer than `sureFrom` keys are typed, `sure` after
-@MainActor
 private struct GrowingScriptIdentifier: ScriptIdentifier {
     var word = "token"
     var sureFrom = 12
@@ -56,7 +54,7 @@ private final class RecordingHost: InputSessionHost {
 private func makeSession(segmentation: ScriptSegmentation? = nil, identifier: (any ScriptIdentifier)? = nil, learned: Bool = true, zenzai: Bool = true) -> (InputSession, RecordingHost) {
     let manager = SegmentsManager(
         kanaKanjiConverter: KanaKanjiConverter.withDefaultDictionary(),
-        applicationDirectoryURL: testLearningDirectory,
+        applicationDirectoryURL: freshTestLearningDirectory(),
         personalizationDirectoryURL: nil,
         context: .init(
             useZenzai: zenzai,
@@ -165,7 +163,6 @@ func uncertainWordIsDecidedByItsLatestPriceWithoutZenzai() {
 }
 
 /// An identification layer that finds one Latin word once its keys are typed
-@MainActor
 private struct OneLatinWord: ScriptIdentifier {
     var word: LatinInputGuess.Span
     func segment(_ input: TypedInput) -> ScriptSegmentation {
@@ -175,7 +172,6 @@ private struct OneLatinWord: ScriptIdentifier {
 
 /// An identification layer that reads one Latin word typed with a capital once its keys are typed, and finds it may end
 /// earlier (see `ScriptSegmentation.shorterWords`)
-@MainActor
 private struct OneCapitalizedWord: ScriptIdentifier {
     var word: LatinInputGuess.Span
     var shorter: LatinInputGuess.Span
@@ -251,7 +247,6 @@ func spaceOffersTheOtherReading() {
 
 /// An identification layer that reads the keys of a word as Japanese, and finds they may be that Latin word once keys
 /// follow it (see `ScriptSegmentation.possibleWords`)
-@MainActor
 private struct OnePossibleWord: ScriptIdentifier {
     var word: LatinInputGuess.Span
     func segment(_ input: TypedInput) -> ScriptSegmentation {
@@ -284,7 +279,6 @@ func spaceOffersLettersForUncertainJapanese() {
 }
 
 /// An identification layer that leaves one word to the converter once its keys are typed
-@MainActor
 private struct OneUncertainWord: ScriptIdentifier {
     var word: String
     var keys: Range<Int>
@@ -312,4 +306,104 @@ func naturalJapaneseIsNotShownAsLettersWhileTyping() {
         type(String(key), into: uncertain)
         #expect(!uncertainHost.markedText.contains("mine"), "\(uncertainHost.markedText)")
     }
+}
+
+/// An identification layer that answers `segmentation` once `from` keys are typed, and nothing before
+private struct SegmentationFrom: ScriptIdentifier {
+    var from: Int
+    var segmentation: ScriptSegmentation
+    func segment(_ input: TypedInput) -> ScriptSegmentation {
+        input.keys.count >= self.from ? self.segmentation : ScriptSegmentation()
+    }
+}
+
+@MainActor
+@Test("入力の終わりで最後の子音がまだ読めていない語も、英単語として知っていれば読めたところまでで比べて英字にする（今日の会議はzoom）", .enabled(if: hasZenzaiWeights))
+func latinWordAtTheEndWithAnUnreadConsonantIsChecked() {
+    let zoom = ScriptSegmentation(possibleWords: [.init(word: .init(word: "zoom", keys: 13 ..< 17), probability: 0.3)])
+    let (session, host) = makeSession(identifier: SegmentationFrom(from: 17, segmentation: zoom))
+    type("kyounokaigihazoom", into: session)
+    #expect(host.markedText == "今日の会議はzoom", "\(host.markedText)")
+    #expect(session.handle(enter))
+    #expect(host.inserted.joined() == "今日の会議はzoom")
+}
+
+@MainActor
+@Test("英単語の終わりがかなの途中にあっても、そのかなの終わりまで読んで日本語がずっと自然なら日本語にする（母の手料理、すっぽかした）", .enabled(if: hasZenzaiWeights))
+func latinWordEndingInsideAKanaIsChecked() {
+    // The model read noter, whose r goes with the yo after it (のてりょ), and sup, whose p doubles the p after it (すっぽ)
+    let noter = ScriptSegmentation(latinWords: [.init(word: "noter", keys: 4 ..< 9)])
+    let (session, host) = makeSession(identifier: SegmentationFrom(from: 11, segmentation: noter))
+    type("hahanoteryouriha,nandemoumakatta.", into: session)
+    #expect(session.handle(enter))
+    #expect(host.inserted.joined().contains("手料理"), "\(host.inserted.joined())")
+    #expect(!host.inserted.joined().contains { $0.isASCII && $0.isLetter }, "\(host.inserted.joined())")
+
+    let sup = ScriptSegmentation(latinWords: [.init(word: "sup", keys: 10 ..< 13)])
+    let (supSession, supHost) = makeSession(identifier: SegmentationFrom(from: 15, segmentation: sup))
+    type("yakusokuwosuppokashitakotowoayamatta.", into: supSession)
+    #expect(supSession.handle(enter))
+    #expect(!supHost.inserted.joined().contains { $0.isASCII && $0.isLetter }, "\(supHost.inserted.joined())")
+}
+
+@MainActor
+@Test("ハイフンを含む語も、日本語の読みがずっと自然なら日本語のまま（えーとねどうですか）", .enabled(if: hasZenzaiWeights))
+func hyphenatedLatinWordIsCheckedAgainstJapanese() {
+    let (session, host) = makeSession(identifier: OneLatinWord(word: .init(word: "e-tone", keys: 0 ..< 6)))
+    type("e-tonedoudesuka", into: session)
+    #expect(session.handle(enter))
+    #expect(host.inserted.joined() == "えーとねどうですか")
+}
+
+@MainActor
+@Test("大文字をローマ字と読んだ語でも、その大文字から始まる英単語を知っていれば変換エンジンに任せ、変換エンジンが英字を選べば英字にする（Tokyo都に住む）", .enabled(if: hasZenzaiWeights))
+func capitalReadAsRomajiIsLeftToTheConverter() {
+    let tokyo = ScriptSegmentation(
+        romajiCapitals: [0],
+        uncertainWords: [.init(word: "Tokyo", spelling: nil, keys: 0 ..< 5, probability: 0.46, romajiProbability: 0.07)]
+    )
+    let (session, host) = makeSession(identifier: SegmentationFrom(from: 13, segmentation: tokyo))
+    type("Tokyotonisumu", into: session)
+    #expect(session.handle(enter))
+    #expect(host.inserted.joined().hasPrefix("Tokyo") && host.inserted.joined().hasSuffix("に住む"), "\(host.inserted)")
+}
+
+@MainActor
+@Test("英単語の頭の n が前のかなの ん なら、ん と英単語に分ける（作品mapを開く）", .enabled(if: hasZenzaiWeights))
+func leadingNOfALatinWordCanCloseTheKanaBefore() {
+    let nmap = ScriptSegmentation(
+        latinWords: [.init(word: "nmap", keys: 6 ..< 10)],
+        shorterWords: [.init(word: 6 ..< 10, shorter: .init(word: "map", keys: 7 ..< 10), probability: 0.3)]
+    )
+    let (session, host) = makeSession(identifier: SegmentationFrom(from: 10, segmentation: nmap))
+    type("sakuhinmapwohiraku", into: session)
+    #expect(session.handle(enter))
+    #expect(host.inserted.joined() == "作品mapを開く")
+}
+@MainActor
+@Test("大文字から打った語が後ろのかなを取り込んでも、短い語で切った方が少しでも自然ならそこで終わる（Web上のKeynote）", .enabled(if: hasZenzaiWeights))
+func shorterWordWinsBySmallMargin() {
+    // Zenzai finds Web上の likelier than Webueの by about 1.5 after 共同作業をするには、
+    let webue = ScriptSegmentation(
+        latinWords: [.init(word: "Webue", keys: 24 ..< 29), .init(word: "Keynote", keys: 31 ..< 38)],
+        shorterWords: [.init(word: 24 ..< 29, shorter: .init(word: "Web", keys: 24 ..< 27), probability: 0.39)]
+    )
+    let (session, host) = makeSession(identifier: SegmentationFrom(from: 38, segmentation: webue))
+    type("kyoudousagyouwosuruniha,WebuenoKeynotewotsukau", into: session)
+    #expect(session.handle(enter))
+    #expect(host.inserted.joined() == "共同作業をするには、Web上のKeynoteを使う")
+}
+
+@MainActor
+@Test("語をもっと長く読む区切り方が辞書にある語で、Zenzai がそちらをはっきり自然と見れば、語はそこまで続く（Finderウインドウ）", .enabled(if: hasZenzaiWeights))
+func longerWordWinsWhenClearlyLikelier() {
+    // The model read Find and left eruindou as kana (得る引導) while finding Finder about as likely
+    let finder = ScriptSegmentation(
+        latinWords: [.init(word: "Find", keys: 30 ..< 34)],
+        longerWords: [.init(word: 30 ..< 34, longer: .init(word: "Finder", keys: 30 ..< 36), probability: 0.33)]
+    )
+    let (session, host) = makeSession(identifier: SegmentationFrom(from: 36, segmentation: finder))
+    type("shindangakanryousuruto,kekkagaFinderuindounihyoujisaremasu.", into: session)
+    #expect(session.handle(enter))
+    #expect(host.inserted.joined() == "診断が完了すると、結果がFinderウインドウに表示されます。")
 }

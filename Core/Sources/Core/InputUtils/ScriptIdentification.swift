@@ -21,8 +21,9 @@ struct TypedInput {
     /// word runs across it, so moving the end into a Latin word splits it there (Sake|hasake)
     var clauseEnd: Int?
 
-    /// Nil when a piece of the input is not a key
-    init?(_ composingText: ComposingText) {
+    /// Nil when a piece of the input is not a key. `clauseEnd` is the element of the input the clause being converted
+    /// ends before, when its end was moved (see `SegmentsManager.clauseEnd`); without it, the cursor of the input says
+    init?(_ composingText: ComposingText, clauseEnd: Int? = nil) {
         var prefix = ComposingText()
         for (index, element) in composingText.input.enumerated() {
             if case .compositionSeparator = element.piece {
@@ -38,9 +39,8 @@ struct TypedInput {
             self.prefixKana.append(prefix.convertTarget)
         }
         self.isComplete = composingText.input.last?.piece == .compositionSeparator
-        if !composingText.isAtEndIndex {
-            let elementsBeforeCursor = composingText.prefixToCursorPosition().input.count
-            self.clauseEnd = self.elementIndices.filter { $0 < elementsBeforeCursor }.count
+        if let elementsBeforeEnd = clauseEnd ?? (composingText.isAtEndIndex ? nil : composingText.prefixToCursorPosition().input.count) {
+            self.clauseEnd = self.elementIndices.filter { $0 < elementsBeforeEnd }.count
         }
         if self.isComplete {
             // The end of the input turns a trailing n into ん (かいぜn is かいぜん), so the n is not a letter left over
@@ -59,7 +59,8 @@ struct TypedInput {
     }
 
     /// The kana the keys in `range` make within the input, when they start and end where kana does (an n left on its
-    /// own before them counts as the ん it becomes); nil when a letter is left over (cぃck) or the range cuts a kana
+    /// own before them counts as the ん it becomes); nil when a letter is left over (cぃck) or the range cuts a kana. A
+    /// capital typed out of habit is a letter here (Tおきょ for Tokyo): see `kanaReadAlone`
     func kana(of range: Range<Int>) -> String? {
         guard let whole = self.prefixKana.last, range.upperBound <= self.keys.count else {
             return nil
@@ -82,12 +83,31 @@ struct TypedInput {
     /// the ん it becomes): as the converter reads them after a word written as letters, which may differ from how they
     /// read within the input (hakaku after Mac is はかく, though machakaku reads まちゃかく)
     func readsAsKana(_ range: Range<Int>) -> Bool {
+        self.kanaReadAlone(of: range) != nil
+    }
+
+    /// The kana of the keys of a word left to the converter (see `ScriptSegmentation.uncertainWords`): within the
+    /// input, or read on their own in lower case when the word starts with a capital, which the converter sees in lower
+    /// case (see `ScriptSegmentation.romajiCapitals`)
+    func kana(ofUncertain range: Range<Int>) -> String? {
+        self.kana(of: range) ?? (self.keys[range.lowerBound].isUppercase ? self.kanaReadAlone(of: range) : nil)
+    }
+
+    /// The kana the keys in `range` make read as romaji on their own, in lower case (ときょ for Tokyo, read as a
+    /// capital typed out of habit, see `ScriptSegmentation.romajiCapitals`), with no letter left over (a last n counts as
+    /// the ん it becomes); nil when a letter is left over
+    func kanaReadAlone(of range: Range<Int>) -> String? {
         var text = ComposingText()
         for offset in range {
-            text.insertAtCursorPosition([.init(piece: .key(intention: nil, input: self.keys[offset], modifiers: []), inputStyle: self.elements[offset].inputStyle)])
+            let key = Character(self.keys[offset].lowercased())
+            text.insertAtCursorPosition([.init(piece: .key(intention: nil, input: key, modifiers: []), inputStyle: self.elements[offset].inputStyle)])
         }
-        let kana = text.convertTarget.hasSuffix("n") ? String(text.convertTarget.dropLast()) : text.convertTarget
-        return !kana.isEmpty && !kana.contains(where: \.isASCII)
+        let lastN = text.convertTarget.hasSuffix("n")
+        let kana = lastN ? String(text.convertTarget.dropLast()) : text.convertTarget
+        guard !kana.isEmpty, !kana.contains(where: \.isASCII) else {
+            return nil
+        }
+        return lastN ? kana + "ん" : kana
     }
 }
 
@@ -102,29 +122,44 @@ struct ScriptSegmentation {
     /// sees them in lower case, so they make kana
     var romajiCapitals: [Int] = []
     /// Words typed in lower case that read as Japanese too, in standard romaji, which the identification layer is not
-    /// sure about (token in tokenwohakkousuru; not cafe, typed as the word on purpose): the converter reads their keys as
-    /// romaji and gets the letters as a temporary dictionary entry
-    /// priced by the probability, so its own dictionary and connection costs decide between the two readings (token
-    /// rather than 都県, but 酒 rather than sake)
+    /// sure about (token in tokenwohakkousuru; not cafe, typed as the word on purpose), and words it knows typed with a
+    /// capital it reads as romaji all the same (Tokyo in Tokyotonisumu, read as と+kyoto): the converter reads their keys
+    /// as romaji and gets the letters as a temporary dictionary entry priced by the probability, so its own dictionary
+    /// and connection costs decide between the two readings (token rather than 都県, but 酒 rather than sake)
     var uncertainWords: [UncertainWord] = []
     /// Where a Latin word may end earlier than decided (Win in Winnogawa, read as one name since names are typed so;
-    /// sign-in in sign-inshite), when the keys left over read as romaji: the converter can prefer the shorter word with
-    /// the rest as Japanese (Winの側, sign-inして, see `SegmentsManager.keepingNaturalJapanese`)
+    /// sign-in in sign-inshite), when the keys left over read as romaji, or start one key later, its first n being the
+    /// ん of the kana before it (map in sakuhinmap): the converter can prefer the shorter word with the rest as Japanese
+    /// (Winの側, sign-inして, 作品map, see `SegmentsManager.keepingNaturalJapanese`)
     var shorterWords: [ShorterWord] = []
+    /// Where a Latin word may end later than decided, at a word the lexicon knows (Finder for Find in Finderuindou, read
+    /// as Find+えるいんどう when the model finds the two ends about as likely): the converter can prefer the longer word
+    /// when the input is clearly likelier so (Finderウインドウ rather than Find得る引導, see
+    /// `SegmentsManager.keepingNaturalJapanese`)
+    var longerWords: [LongerWord] = []
     /// Words typed in lower case that the identification layer reads as Japanese though it knows them as Latin words
-    /// (node in nodewokidousuru, read as ので): the converter writes them as letters when their Japanese reading is
-    /// clearly unnatural (see `SegmentsManager.keepingNaturalJapanese`)
+    /// (node in nodewokidousuru, read as ので; zoom at the end of kyounokaigihazoom, its m still unread): the converter
+    /// writes them as letters when their Japanese reading is clearly unnatural (see `SegmentsManager.keepingNaturalJapanese`)
     var possibleWords: [PossibleWord] = []
 
     struct ShorterWord: Equatable {
         /// The keys of the word as decided
         var word: Range<Int>
-        /// The shorter word, from the same start, with the spelling to write
+        /// The shorter word, from the same start or one key later, with the spelling to write
         var shorter: LatinInputGuess.Span
         /// The probability that the keys are the shorter word
         var probability: Double
         /// The lexicon knows the shorter word; otherwise it starts with a capital and may be a name (Osaka in Osakashi)
         var known = true
+    }
+
+    struct LongerWord: Equatable {
+        /// The keys of the word as decided
+        var word: Range<Int>
+        /// The longer word, from the same start, with the spelling to write
+        var longer: LatinInputGuess.Span
+        /// The probability that the keys are the longer word
+        var probability: Double
     }
 
     struct PossibleWord: Equatable {
@@ -151,14 +186,14 @@ struct ScriptSegmentation {
     }
 }
 
-/// The identification layer: tells which parts of the typed keys are Latin words
-@MainActor
+/// The identification layer: tells which parts of the typed keys are Latin words. It runs where the conversion runs,
+/// on whichever thread holds the conversion lock (see `ConversionLock`)
 protocol ScriptIdentifier {
     func segment(_ input: TypedInput) -> ScriptSegmentation
 }
 
-/// The identification layer as rules, built up one case at a time
-@MainActor
+/// The identification layer as rules, built up one case at a time. It asks the spell checker, so it runs on the main
+/// thread (see `LatinInputGuess.systemKnownWordOnMainThread`)
 struct RuleBasedScriptIdentifier: ScriptIdentifier {
     func segment(_ input: TypedInput) -> ScriptSegmentation {
         let keys = input.keys
@@ -167,7 +202,7 @@ struct RuleBasedScriptIdentifier: ScriptIdentifier {
             prefixKana: input.prefixKana,
             isComplete: input.isComplete,
             endsWell: { Self.latinWordEndsWell(at: $0, in: input) },
-            knownWord: LatinInputGuess.systemKnownWord
+            knownWord: LatinInputGuess.systemKnownWordOnMainThread
         )
         words += LatinInputGuess.capitalRuns(keys: keys).filter { run in !words.contains { $0.keys.overlaps(run.keys) } }
         words += Self.unknownCapitalizedWords(in: input, knownWords: words)

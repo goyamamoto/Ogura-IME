@@ -37,8 +37,8 @@ extension InputSession {
     /// Lengths count only script characters (kana and kanji for Japanese, Latin letters for English), not product names, digits, or symbols
     public static func brokenContinuationReason(_ text: String, after context: String) -> String? {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.isEmpty {
-            return "空"
+        if let reason = Self.unreadableOutputReason(text) {
+            return reason
         }
         let language = ContinuationPrompt.Language.detect(in: context)
         // Talks about the instructions or the request instead of continuing the text (「書きかけの文章を渡してください」 "Please give me the draft", 「80文字以内で」 "within 80 characters", etc.)
@@ -109,15 +109,36 @@ extension InputSession {
     /// Even when asked for a continuation, a model sometimes repeats the preceding text before it starts writing.
     /// Drops the part where the end of the context and the start of the generated text overlap (longest match), and returns empty while generation is still retracing the context.
     /// A model may also retrace with slightly different wording (「来月の初めまでに」 -> 「来月の初めに」, "by early next month" -> "early next month"), so if the text is similar up to the last clause of the context, drops up to there
+    /// Why `text` (trimmed) has nothing to read, or nil when it has: empty; a chat-format control token spelled from ordinary
+    /// tokens (<|"|>) — the real ones are banned while generating, and a model that wanted one may spell it out instead; or
+    /// symbols only (））). A sentence mark alone is kept: 「。」 closes a sentence the context left open
+    static func unreadableOutputReason(_ text: String) -> String? {
+        if text.isEmpty {
+            return "空"
+        }
+        if text.contains("<|") || text.contains("|>") {
+            return "制御トークンの形"
+        }
+        if !text.contains(where: { $0.isLetter || $0.isNumber }), !text.allSatisfy({ Self.sentenceMarks.contains($0) || $0.isWhitespace }) {
+            return "記号だけ"
+        }
+        return nil
+    }
+
+    /// Marks that end or separate sentences: an output made only of these is a way to close the sentence, not symbols
+    private static let sentenceMarks: Set<Character> = [
+        "。", "、", "，", "．", ",", ".", "!", "?", "！", "？", "…", "‥", "・", ":", ";", "：", "；"
+    ]
+
+    /// How much text (script characters, see `ContinuationPrompt.Language.weight`) found elsewhere in the context counts as a
+    /// repeated sentence in `removingRepeatedPrefix`
+    static let repeatedClauseWeight = 4
+
     public static func removingRepeatedPrefix(from generated: String, after context: String) -> String {
         let generated = generated.trimmingCharacters(in: .whitespacesAndNewlines)
         let context = context.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !generated.isEmpty, !context.isEmpty else {
             return generated
-        }
-        // If the whole generated text appears in the context, the model is still repeating (or it ended with only a repetition). Differences in whitespace are ignored
-        if generated.count >= 2, Self.removingWhitespace(context).contains(Self.removingWhitespace(generated)) {
-            return ""
         }
         let contextChars = Array(context)
         let generatedChars = Array(generated)
@@ -126,6 +147,13 @@ extension InputSession {
             for length in stride(from: maxOverlap, through: 2, by: -1) where contextChars.suffix(length) == generatedChars.prefix(length) {
                 return String(generatedChars.dropFirst(length)).trimmingCharacters(in: .whitespacesAndNewlines)
             }
+        }
+        // If the whole generated text appears elsewhere in the context, the model is repeating a sentence (or it ended with
+        // only a repetition). Differences in whitespace are ignored. A short ending (です。 after 恥ずかしい) is found in
+        // almost any context, so only a clause's worth of text counts
+        let language = ContinuationPrompt.Language.detect(in: context)
+        if language.weight(of: generated) >= Self.repeatedClauseWeight, Self.removingWhitespace(context).contains(Self.removingWhitespace(generated)) {
+            return ""
         }
         if let end = Self.endOfRestatedPrefix(in: generated, after: context) {
             return String(generated[end...]).trimmingCharacters(in: .whitespacesAndNewlines)

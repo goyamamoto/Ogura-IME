@@ -19,8 +19,14 @@ public enum ClientAction {
     case commitAllCandidates
     /// Cancel the conversion and go back to typing hiragana (BackSpace after conversion in MS-IME)
     case cancelConversion
+    /// Esc while typing (live conversion): back to the reading first, and stop the input when it is at the reading already
+    /// by an earlier Esc
+    case cancelConversionOrStopComposition
     /// Command that edits the selection range with Shift+Left/Right
     case editSegment(Int)
+    /// Move the caret inside the reading by the count (← / → while typing): the input goes back to its reading first,
+    /// and what is typed or deleted next applies at the caret
+    case moveCursor(Int)
 
     /// Command that enters previewing
     case enterFirstCandidatePreviewMode
@@ -31,6 +37,13 @@ public enum ClientAction {
     case selectNextCandidate
     case selectPrevCandidate
     case selectNumberCandidate(Int)
+    /// Move the clause being converted by the count, without committing (→ / ← in MS-IME)
+    case moveClauseFocus(Int)
+    /// Choose the candidate for the number key and move on to the next clause, without committing (MS-IME)
+    case selectNumberCandidateAndMoveToNextClause(Int)
+    /// Show the clause being converted, or the whole input, in the form of the function key (F6 hiragana … F10
+    /// half-width letters) without committing it (MS-IME)
+    case applyFunction(UserAction.Function)
 
     case selectInputLanguage(InputLanguage)
     case commitMarkedTextAndSelectInputLanguage(InputLanguage)
@@ -74,4 +87,6 @@ public enum ClientActionCallback {
     ///
     case basedOnBackspace(ifIsEmpty: InputState, ifIsNotEmpty: InputState)
     case basedOnSubmitCandidate(ifIsEmpty: InputState, ifIsNotEmpty: InputState)
+    /// `ifIsEmpty` when no input is left, as `transition` would, else `ifIsNotEmpty`
+    case basedOnRemainingInput(ifIsEmpty: InputState, ifIsNotEmpty: InputState)
 }

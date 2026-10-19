@@ -5,6 +5,9 @@ IGNORE_LINT=false
 DRY_RUN=false
 NO_PKILL=false
 ADHOC=false
+# Build on what the last build left (build/DerivedData) instead of from clean: after a change to Ogura or Core only
+# those are compiled again, not the dependencies
+INCREMENTAL=false
 TEAM_ID="${OGURA_TEAM_ID:-}"
 
 # Parse command-line options
@@ -14,6 +17,7 @@ while [[ "$#" -gt 0 ]]; do
         --dry-run) DRY_RUN=true ;;
         --no-pkill) NO_PKILL=true ;;
         --adhoc) ADHOC=true ;;
+        --incremental) INCREMENTAL=true ;;
         --team) TEAM_ID="$2"; shift ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;
     esac
@@ -42,6 +46,15 @@ APP_PATH="build/Ogura.app"
 rm -rf "$APP_PATH"
 mkdir -p build
 
+CLEAN=clean
+if [ "$INCREMENTAL" = true ]; then
+    CLEAN=
+fi
+
+# The build number (CFBundleVersion) is the number of commits in the history, so each build can be told apart. The version
+# shown to users (CFBundleShortVersionString) is MARKETING_VERSION in the Xcode project
+BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
+
 if [ "$ADHOC" = false ] && [ -z "$TEAM_ID" ]; then
     echo "署名に使う Team ID を指定してください: ./install.sh --team <TEAM_ID>（または環境変数 OGURA_TEAM_ID）"
     echo "Team ID は Xcode > Settings > Accounts で確認できます。Personal Team でも構いません。"
@@ -54,8 +67,9 @@ if [ "$ADHOC" = true ]; then
     # Build Release with signing turned off, then ad-hoc sign it with the entitlements.
     # Not usable for distribution (that needs Developer ID and notarization).
     xcodebuild -project Ogura.xcodeproj -scheme Ogura -configuration Release \
-        -derivedDataPath build/DerivedData clean build \
+        -derivedDataPath build/DerivedData $CLEAN build \
         CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+        CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
         ENABLE_CODE_COVERAGE=NO CLANG_COVERAGE_MAPPING=NO
     cp -R build/DerivedData/Build/Products/Release/Ogura.app "$APP_PATH"
     codesign --force --deep --sign - \
@@ -66,8 +80,9 @@ else
     # The signing identity stays the same across reinstalls, so macOS keeps its permission settings.
     # For Developer ID signing and notarization for distribution, use pkgbuild.sh.
     xcodebuild -project Ogura.xcodeproj -scheme Ogura -configuration Release \
-        -derivedDataPath build/DerivedData clean build \
+        -derivedDataPath build/DerivedData $CLEAN build \
         DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic \
+        CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
         ENABLE_CODE_COVERAGE=NO CLANG_COVERAGE_MAPPING=NO \
         -allowProvisioningUpdates
     cp -R build/DerivedData/Build/Products/Release/Ogura.app "$APP_PATH"

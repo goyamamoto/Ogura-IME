@@ -6,7 +6,7 @@ import Testing
 private func makeSegmentsManager() -> SegmentsManager {
     SegmentsManager(
         kanaKanjiConverter: .withDefaultDictionary(),
-        applicationDirectoryURL: testLearningDirectory,
+        applicationDirectoryURL: freshTestLearningDirectory(),
         personalizationDirectoryURL: nil,
         context: .init(useZenzai: false)
     )

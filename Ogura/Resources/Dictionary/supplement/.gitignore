@@ -1,0 +1,4 @@
+# The dictionary itself is built by Tools/build_supplement_dictionary.sh and not tracked
+supplement*.louds
+supplement*.loudschars2
+supplement*.loudstxt3

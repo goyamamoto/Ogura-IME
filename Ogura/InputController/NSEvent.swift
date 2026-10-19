@@ -7,7 +7,8 @@ extension NSEvent {
             modifierFlags: .init(from: self.modifierFlags),
             characters: self.characters,
             charactersIgnoringModifiers: self.charactersIgnoringModifiers,
-            keyCode: self.keyCode
+            keyCode: self.keyCode,
+            timestamp: self.timestamp
         )
     }
 }

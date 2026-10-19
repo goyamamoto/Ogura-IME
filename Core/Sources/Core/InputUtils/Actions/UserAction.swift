@@ -351,9 +351,9 @@ public enum UserAction {
             "l": .editSegment(1),          // Extend the segment
             "e": .navigation(.up),         // Previous candidate
             "x": .navigation(.down),       // Next candidate
-            "n": .navigation(.right),      // Commit the first segment and move to the next one
-            "d": .navigation(.right),      // Move the focused segment right
-            "s": .navigation(.left),       // Move the focused segment left (does nothing, because there is only one segment)
+            "n": .navigation(.right),      // Move on to the next clause
+            "d": .navigation(.right),      // Move on to the next clause
+            "s": .navigation(.left),       // Move back to the previous clause
             "z": .escape,                  // Cancel conversion / clear all
             "g": .escape,
             "\r": .enter                   // Commit with Ctrl+Enter

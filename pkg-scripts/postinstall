@@ -1,5 +1,29 @@
 #!/bin/sh
-# After installation, stop the old Ogura if it is running. The new version starts the next time you select it as an input source.
-# (On a first install, log out and log back in to see it in the input source list.)
+# Runs as root after the files are installed. $2 is the install location (/Library/Input Methods).
+#
+# 1. Stop the old Ogura if it is running, in every account. The new version starts the next time it is selected as an
+#    input source.
+# 2. Register the input source for the account that is logged in, so Ogura appears in the input source list without
+#    logging out. Registration is per login session, so it runs as that user inside the user's session
+#    (launchctl asuser). Other accounts see Ogura after they log in again.
+#    The installer unpacks this script and the helper into a folder only root can enter (mktemp, mode 700), so the
+#    helper is first copied to a folder of its own that the user can read.
 /usr/bin/pkill -x Ogura || true
+
+app="${2:-/Library/Input Methods}/Ogura.app"
+helper="$(dirname "$0")/register-input-source"
+user="$(/usr/bin/stat -f %Su /dev/console 2>/dev/null || true)"
+if [ -x "$helper" ] && [ -n "$user" ] && [ "$user" != "root" ] && [ "$user" != "loginwindow" ]; then
+    uid="$(/usr/bin/id -u "$user")"
+    dir="$(/usr/bin/mktemp -d /private/tmp/ogura-register.XXXXXX)"
+    /bin/chmod 755 "$dir"
+    /bin/cp -X "$helper" "$dir/register-input-source"
+    /bin/chmod 755 "$dir/register-input-source"
+    if /bin/launchctl asuser "$uid" /usr/bin/sudo -u "$user" "$dir/register-input-source" "$app" 2>&1; then
+        echo "Ogura: registered the input source for $user"
+    else
+        echo "Ogura: could not register the input source for $user; it appears after logging in again"
+    fi
+    /bin/rm -rf "$dir"
+fi
 exit 0

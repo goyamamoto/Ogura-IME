@@ -155,6 +155,10 @@ public enum InputState: Sendable, Hashable {
                     return (.commitMarkedText, .transition(.none))
                 }
             case .escape:
+                if liveConversionEnabled {
+                    // What live conversion shows goes back to its reading first, as a conversion does (MS-IME, macOS)
+                    return (.cancelConversionOrStopComposition, .basedOnRemainingInput(ifIsEmpty: .none, ifIsNotEmpty: .composing))
+                }
                 return (.stopComposition, .transition(.none))
             case .space:
                 if inputLanguage == .english {
@@ -165,6 +169,10 @@ public enum InputState: Sendable, Hashable {
                     return (.enterFirstCandidatePreviewMode, .transition(.previewing))
                 }
             case let .function(function):
+                if keyBindingStyle == .msIME, inputLanguage == .japanese {
+                    // MS-IME: the input takes the form without being committed; Enter commits it
+                    return (.applyFunction(function), .basedOnSubmitCandidate(ifIsEmpty: .none, ifIsNotEmpty: .selecting))
+                }
                 switch function {
                 case .six:
                     return (.submitHiraganaCandidate, .transition(.none))
@@ -196,6 +204,9 @@ public enum InputState: Sendable, Hashable {
                     return (.editSegment(1), .transition(.selecting))
                 } else if direction == .left && event.modifierFlags.contains(.shift) {
                     return (.editSegment(-1), .transition(.selecting))
+                } else if direction == .left || direction == .right {
+                    // The caret moves inside the reading (MS-IME): what live conversion shows goes back to the reading
+                    return (.moveCursor(direction == .right ? 1 : -1), .fallthrough)
                 } else {
                     // Consume navigation keys
                     return (.consume, .fallthrough)
@@ -229,8 +240,16 @@ public enum InputState: Sendable, Hashable {
             case .space:
                 return (.enterCandidateSelectionMode, .transition(.selecting))
             case .escape:
+                if liveConversionEnabled {
+                    // Back to the reading, which live conversion would otherwise show converted again
+                    return (.cancelConversion, .transition(.composing))
+                }
                 return (.hideCandidateWindow, .transition(.composing))
             case let .function(function):
+                if keyBindingStyle == .msIME {
+                    // MS-IME: the input takes the form without being committed; Enter commits it
+                    return (.applyFunction(function), .basedOnSubmitCandidate(ifIsEmpty: .none, ifIsNotEmpty: .selecting))
+                }
                 switch function {
                 case .six:
                     return (.submitHiraganaCandidate, .transition(.none))
@@ -256,6 +275,11 @@ public enum InputState: Sendable, Hashable {
                     return (.editSegment(1), .transition(.selecting))
                 } else if direction == .left && event.modifierFlags.contains(.shift) {
                     return (.editSegment(-1), .transition(.selecting))
+                } else if direction == .right && keyBindingStyle == .msIME {
+                    // MS-IME: → goes on to the next clause of the conversion shown
+                    return (.moveClauseFocus(1), .transition(.selecting))
+                } else if direction == .left && keyBindingStyle == .msIME {
+                    return (.moveClauseFocus(-1), .transition(.selecting))
                 } else {
                     // Consume navigation keys
                     return (.consume, .fallthrough)
@@ -291,7 +315,9 @@ public enum InputState: Sendable, Hashable {
                 return (.cancelConversion, .transition(.composing))
             case .escape:
                 if liveConversionEnabled {
-                    return (.hideCandidateWindow, .transition(.composing))
+                    // Back to the reading, with the segments as they were before editing them: closing the candidate
+                    // window alone would leave the input shown converted, and the next Esc would clear it
+                    return (.cancelConversion, .transition(.composing))
                 } else {
                     return (.enterFirstCandidatePreviewMode, .transition(.previewing))
                 }
@@ -306,11 +332,16 @@ public enum InputState: Sendable, Hashable {
                 if direction == .right {
                     if event.modifierFlags.contains(.shift) {
                         return (.editSegment(1), .fallthrough)
+                    } else if keyBindingStyle == .msIME {
+                        // MS-IME: → moves to the next clause without committing; Enter commits them all
+                        return (.moveClauseFocus(1), .fallthrough)
                     } else {
                         return (.submitSelectedCandidate, .basedOnSubmitCandidate(ifIsEmpty: .none, ifIsNotEmpty: .selecting))
                     }
                 } else if direction == .left && event.modifierFlags.contains(.shift) {
                     return (.editSegment(-1), .fallthrough)
+                } else if direction == .left && keyBindingStyle == .msIME {
+                    return (.moveClauseFocus(-1), .fallthrough)
                 } else if direction == .down {
                     return (.selectNextCandidate, .fallthrough)
                 } else if direction == .up {
@@ -319,6 +350,10 @@ public enum InputState: Sendable, Hashable {
                     return (.consume, .fallthrough)
                 }
             case let .function(function):
+                if keyBindingStyle == .msIME {
+                    // MS-IME: the clause takes the form without being committed; → moves on and Enter commits them all
+                    return (.applyFunction(function), .basedOnSubmitCandidate(ifIsEmpty: .none, ifIsNotEmpty: .selecting))
+                }
                 switch function {
                 case .six:
                     return (.submitHiraganaCandidate, .basedOnSubmitCandidate(ifIsEmpty: .none, ifIsNotEmpty: .selecting))
@@ -334,6 +369,10 @@ public enum InputState: Sendable, Hashable {
             case .number(let num):
                 switch num {
                 case .one, .two, .three, .four, .five, .six, .seven, .eight, .nine:
+                    if keyBindingStyle == .msIME {
+                        // MS-IME: the number chooses the candidate for the clause and moves on to the next one
+                        return (.selectNumberCandidateAndMoveToNextClause(num.intValue), .fallthrough)
+                    }
                     return (.selectNumberCandidate(num.intValue), .basedOnSubmitCandidate(ifIsEmpty: .none, ifIsNotEmpty: .previewing))
                 case .zero, .shiftZero:
                     return (.commitMarkedTextAndAppendPieceToMarkedText([num.inputPiece]), .transition(.composing))

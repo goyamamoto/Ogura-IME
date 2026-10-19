@@ -54,10 +54,13 @@ class OguraInputController: IMKInputController, NSMenuItemValidation {
     }
 
     override init!(server: IMKServer!, delegate: Any!, client inputClient: Any!) {
+        let appDelegate = (NSApplication.shared.delegate as? AppDelegate)!
         let segmentsManager = SegmentsManager(
-            kanaKanjiConverter: (NSApplication.shared.delegate as? AppDelegate)!.kanaKanjiConverter,
+            kanaKanjiConverter: appDelegate.kanaKanjiConverter,
             applicationDirectoryURL: AppContainer.memoryDirectoryURL(),
-            personalizationDirectoryURL: AppContainer.personalizationDirectoryURL()
+            personalizationDirectoryURL: AppContainer.personalizationDirectoryURL(),
+            // Typed keys are shown at once and converted on the conversion thread
+            context: .init(readingJudge: appDelegate.readingJudge, conversionScheduler: BackgroundConversionScheduler.shared)
         )
         self.session = MainActor.assumeIsolated {
             InputSession(segmentsManager: segmentsManager)
@@ -323,9 +326,14 @@ extension OguraInputController: InputSessionHost {
             }
             text.append(NSAttributedString(string: part.content, attributes: attributes))
         }
+        // No caret means the end: clients take the range as is, and Chromium turns NSNotFound into a caret before
+        // the marked text
+        let selectionRange = markedText.selectionRange.location == NSNotFound
+            ? NSRange(location: text.length, length: 0)
+            : markedText.selectionRange
         self.client()?.setMarkedText(
             text,
-            selectionRange: markedText.selectionRange,
+            selectionRange: selectionRange,
             replacementRange: NSRange(location: NSNotFound, length: 0)
         )
     }
@@ -345,6 +353,10 @@ extension OguraInputController: InputSessionHost {
 
     func candidateRow(forNumberKey number: Int) -> Int {
         self.candidatesViewController.getNumberCandidate(num: number)
+    }
+
+    func conversionDidUpdate() {
+        self.refreshWindows()
     }
 
     func leftSideContext(maxCount: Int) -> String? {

@@ -14,6 +14,8 @@ actor MLXModelCache {
     private var headers: [String: [Int]] = [:]
     /// Per model: the IDs of tokens that are only whitespace, newlines, or punctuation (built by scanning the vocabulary once)
     private var fillerTokens: [String: Set<Int>] = [:]
+    /// Per model: the IDs of the chat format's control tokens (built by scanning the vocabulary once)
+    private var controlTokens: [String: Set<Int>] = [:]
     /// Per model: how to use the chat template. Parsing an unreadable template takes more than 1 second before it fails, so remember the mode once it is known
     private var chatTemplateModes: [String: ChatTemplateMode] = [:]
 
@@ -29,6 +31,7 @@ actor MLXModelCache {
         self.loaded = nil
         self.headers = [:]
         self.fillerTokens = [:]
+        self.controlTokens = [:]
         let task = Task {
             try await loadModelContainer(from: directory, using: TransformersTokenizerLoader())
         }
@@ -59,6 +62,7 @@ actor MLXModelCache {
         self.loaded = nil
         self.headers = [:]
         self.fillerTokens = [:]
+        self.controlTokens = [:]
         self.releaseTask = nil
     }
 
@@ -69,6 +73,17 @@ actor MLXModelCache {
         }
         let tokens = make()
         self.fillerTokens[directory.path] = tokens
+        return tokens
+    }
+
+    /// The chat format's control tokens of the model in `directory` (see `MLXContinuationProvider.controlTokenIds`). If they are
+    /// not cached, builds them with `make` and remembers them
+    func controlTokens(for directory: URL, make: @Sendable () -> Set<Int>) -> Set<Int> {
+        if let tokens = self.controlTokens[directory.path] {
+            return tokens
+        }
+        let tokens = make()
+        self.controlTokens[directory.path] = tokens
         return tokens
     }
 

@@ -73,10 +73,11 @@ extension Config {
         public static let key: String = "org.if0.inputmethod.ogura.preference.latinCandidateForNonJapaneseInput"
     }
     /// Setting to tell Latin words from romaji with the learned identification layer (see `TaggerScriptIdentifier`)
-    /// rather than the rules (`RuleBasedScriptIdentifier`). On trial
+    /// rather than the rules (`RuleBasedScriptIdentifier`). On by default: the model gets 73 of the 73 hand-written
+    /// sentences and 380 of 386 system messages right against the rules' 63 and 279 (see docs/latin-identification.md)
     public struct LearnedScriptIdentification: BoolConfigItem {
         public init() {}
-        static let `default` = false
+        static let `default` = true
         public static let key: String = "org.if0.inputmethod.ogura.preference.learnedScriptIdentification"
     }
 }

@@ -16,7 +16,7 @@ private func makeCandidate(text: String, reading: String) -> Candidate {
 private func makePredictionSegmentsManager() -> SegmentsManager {
     SegmentsManager(
         kanaKanjiConverter: .withDefaultDictionary(),
-        applicationDirectoryURL: testLearningDirectory,
+        applicationDirectoryURL: freshTestLearningDirectory(),
         personalizationDirectoryURL: nil,
         context: .init(useZenzai: false)
     )

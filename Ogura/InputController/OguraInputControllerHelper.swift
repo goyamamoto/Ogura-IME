@@ -11,7 +11,7 @@ extension OguraInputController {
         self.appMenu.addItem(self.liveConversionToggleMenuItem)
         self.appMenu.addItem(NSMenuItem.separator())
         self.appMenu.addItem(NSMenuItem(title: "設定…", action: #selector(self.openConfigWindow(_:)), keyEquivalent: ""))
-        self.appMenu.addItem(NSMenuItem(title: "ベースの azooKey を GitHub で見る…", action: #selector(self.openGitHubRepository(_:)), keyEquivalent: ""))
+        self.appMenu.addItem(NSMenuItem(title: "Ogura を GitHub で見る…", action: #selector(self.openGitHubRepository(_:)), keyEquivalent: ""))
     }
 
     @objc func toggleLiveConversion(_ sender: Any) {
@@ -31,7 +31,7 @@ extension OguraInputController {
     }
 
     @objc func openGitHubRepository(_ sender: Any) {
-        guard let url = URL(string: "https://github.com/azooKey/azooKey-Desktop") else {
+        guard let url = URL(string: "https://github.com/goyamamoto/Ogura-IME") else {
             return
         }
         NSWorkspace.shared.open(url)

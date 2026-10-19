@@ -53,7 +53,7 @@ struct DataProtectionTests {
             for line in text.split(separator: "\n")
             where (line.contains("http://") || line.contains("https://")) && !line.trimmingCharacters(in: .whitespaces).hasPrefix("//") {
                 let isAllowedRepositoryLink = path.hasSuffix("OguraInputControllerHelper.swift")
-                    && line.contains("https://github.com/azooKey/azooKey-Desktop")
+                    && line.contains("https://github.com/goyamamoto/Ogura-IME")
                 if !isAllowedRepositoryLink {
                     Issue.record("\(path) contains a URL literal: \(line.trimmingCharacters(in: .whitespaces))")
                 }
@@ -154,7 +154,7 @@ struct DataProtectionTests {
         let delegate = RecordingDelegate()
         let manager = SegmentsManager(
             kanaKanjiConverter: KanaKanjiConverter.withDefaultDictionary(),
-            applicationDirectoryURL: testLearningDirectory,
+            applicationDirectoryURL: freshTestLearningDirectory(),
             personalizationDirectoryURL: nil,
             context: .init(useZenzai: false)
         )
@@ -174,7 +174,7 @@ struct DataProtectionTests {
         host.leftContext = String(repeating: "あ", count: 1000)
         let manager = SegmentsManager(
             kanaKanjiConverter: KanaKanjiConverter.withDefaultDictionary(),
-            applicationDirectoryURL: testLearningDirectory,
+            applicationDirectoryURL: freshTestLearningDirectory(),
             personalizationDirectoryURL: nil,
             context: .init(useZenzai: false, liveConversionEnabled: false)
         )

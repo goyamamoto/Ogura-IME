@@ -25,6 +25,7 @@ struct ConfigWindow: View {
     @ConfigState private var systemUserDictionary = Config.SystemUserDictionary()
 
     @ConfigState private var inferenceLimit = Config.ZenzaiInferenceLimit()
+    @ConfigState private var zenzaiModel = Config.ZenzaiModel()
     @ConfigState private var zenzaiPersonalizationLevel = Config.ZenzaiPersonalizationLevel()
     @ConfigState private var debugPredictiveTyping = Config.DebugPredictiveTyping()
     @ConfigState private var continuation = Config.Continuation()
@@ -148,8 +149,8 @@ struct ConfigWindow: View {
                 Toggle("先頭を大文字で打ったら、確定するまで英字入力にする（ライブ変換がオフのときは常にオン）", isOn: self.$uppercaseStartsAlphabetInput)
                 Toggle("日本語らしくない入力には、打った英字のままの候補も出す", isOn: self.$latinCandidateForNonJapaneseInput)
                 VStack(alignment: .leading, spacing: 2) {
-                    Toggle("英単語とローマ字の見分けに学習モデルを使う（試用中）", isOn: self.$learnedScriptIdentification)
-                    Text("入力の中の英単語（iPhone、pig など）を、規則ではなく学習したモデルで見分けます。")
+                    Toggle("英単語とローマ字の見分けに学習モデルを使う", isOn: self.$learnedScriptIdentification)
+                    Text("入力の中の英単語（iPhone、pig など）を、規則ではなく学習したモデルで見分けます。オフにすると規則で見分けます。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -204,6 +205,11 @@ struct ConfigWindow: View {
         .formStyle(.grouped)
     }
 
+    /// Whether the app has genmai's weights (see Tools/build_genmai_gguf.sh)
+    private var hasGenmai: Bool {
+        Bundle.main.url(forResource: "ggml-model-Q5_K_M", withExtension: "gguf", subdirectory: "genmai") != nil
+    }
+
     private var systemUserDictionaryStatus: String {
         if let systemUserDictionaryMessage {
             return systemUserDictionaryMessage
@@ -219,6 +225,16 @@ struct ConfigWindow: View {
     private var advancedTab: some View {
         Form {
             Section {
+                Picker("Zenzai のモデル", selection: self.$zenzaiModel) {
+                    Text("zenz-v3.2-small").tag(Config.ZenzaiModel.Value.zenz)
+                    Text("genmai").tag(Config.ZenzaiModel.Value.genmai)
+                }
+                .disabled(!self.hasGenmai)
+                Text(self.hasGenmai
+                        ? "genmai（subdiox 氏、CC BY-SA 4.0）は zenz-v2.5-medium をもとに学習したモデルで、zenz-v3.2-small の約 3 倍の大きさです。変換の精度が上がる代わりに、1 打鍵あたりの時間とメモリが増えます。英単語とローマ字の見分けには、どちらを選んでも zenz-v3.2-small を使います。"
+                        : "このビルドには genmai が入っていないため、zenz-v3.2-small を使います。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Stepper("Zenzai の推論上限: \(self.$inferenceLimit.wrappedValue)", value: self.$inferenceLimit, in: 1 ... 50)
                 Text("小さくすると入力中のもたつきが減り、大きくすると変換の精度が上がります。")
                     .font(.caption)
@@ -296,7 +312,9 @@ struct ConfigWindow: View {
             self.learningResetMessage = "リセットに失敗しました"
             return
         }
-        appDelegate.kanaKanjiConverter.resetMemory()
+        ConversionLock.withLock {
+            appDelegate.kanaKanjiConverter.resetMemory()
+        }
         self.learningResetMessage = "リセットしました"
         Task {
             try? await Task.sleep(for: .seconds(10))

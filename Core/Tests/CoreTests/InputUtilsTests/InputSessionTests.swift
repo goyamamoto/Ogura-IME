@@ -24,7 +24,9 @@ struct InputSessionTests {
         }
         func updateMarkedText(_ markedText: SegmentsManager.MarkedText) {
             self.markedText = markedText.map(\.content).joined()
+            self.selectionRange = markedText.selectionRange
         }
+        var selectionRange = NSRange(location: NSNotFound, length: 0)
         func switchInputMode(_ language: InputLanguage) {
             self.inputModes.append(language)
         }
@@ -133,10 +135,12 @@ struct InputSessionTests {
     ) -> (InputSession, RecordingHost) {
         let manager = SegmentsManager(
             kanaKanjiConverter: Self.converter,
-            applicationDirectoryURL: testLearningDirectory,
+            applicationDirectoryURL: freshTestLearningDirectory(),
             personalizationDirectoryURL: nil,
             context: .init(useZenzai: false, liveConversionEnabled: liveConversion)
         )
+        // The converter is shared for speed: each session starts with nothing learned, whatever earlier tests committed
+        manager.resetLearningData()
         let settings = InputSession.Settings(
             liveConversionEnabled: liveConversion,
             keyBindingStyle: keyBindingStyle,
@@ -179,15 +183,24 @@ struct InputSessionTests {
         #expect(session.inputState == .none)
     }
 
-    @Test("変換中の F10 は、選んでいる文節だけを英字で確定する（MS-IME と同じ）")
+    @Test("変換中の F10 は、選んでいる文節だけを英字にする（MS-IME と同じ）。macOS 標準ではその文節を確定する")
     func f10ConvertsSelectedClauseToLatin() {
         let (session, host) = self.makeSession(liveConversion: true)
         self.type("korehaWindowsdesu", into: session)
         #expect(session.handle(self.space))
         #expect(session.handle(self.keyCode(109)))
-        #expect(host.inserted == ["koreha"])
+        #expect(host.markedText == "korehaWindowsです")
+        #expect(host.inserted.isEmpty, "\(host.inserted)")
         #expect(session.handle(self.enter))
-        #expect(host.inserted.joined() == "korehaWindowsです")
+        #expect(host.inserted == ["korehaWindowsです"])
+
+        let (macSession, macHost) = self.makeSession(keyBindingStyle: .macOS, liveConversion: true)
+        self.type("korehaWindowsdesu", into: macSession)
+        #expect(macSession.handle(self.space))
+        #expect(macSession.handle(self.keyCode(109)))
+        #expect(macHost.inserted == ["koreha"])
+        #expect(macSession.handle(self.enter))
+        #expect(macHost.inserted.joined() == "korehaWindowsです")
     }
 
     @Test("BackSpace の後も英字の語は英字のまま表示し、1文字ずつ消す")
@@ -339,6 +352,219 @@ struct InputSessionTests {
         #expect(!session.handle(self.escape))
     }
 
+    @Test("ライブ変換で変換されて見える入力の Esc は、ひらがなに戻して打ち続けられるようにし、もう一度押すと消す")
+    func escapeShowsReadingBeforeClearing() {
+        let (session, host) = self.makeSession(liveConversion: true)
+        self.type("kyouhaiitenkidesu", into: session)
+        #expect(host.markedText == "今日はいい天気です")
+        #expect(session.handle(self.escape))
+        #expect(host.markedText == "きょうはいいてんきです")
+        #expect(session.inputState == .composing)
+        // Typing goes on at the reading (MS-IME: the input stays unconverted until Space), so Esc then clears it
+        self.type("ne", into: session)
+        #expect(host.markedText == "きょうはいいてんきですね")
+        #expect(session.handle(self.escape))
+        #expect(host.markedText.isEmpty)
+        #expect(session.inputState == .none)
+        #expect(host.inserted.isEmpty)
+
+        // The reading can look the same as what live conversion showed (a Latin word with kana around it): Esc still
+        // stops there once, and only the next Esc clears the input
+        let (latinSession, latinHost) = self.makeSession(liveConversion: true)
+        self.type("korehaWindowsdesu", into: latinSession)
+        #expect(latinHost.markedText == "これはWindowsです")
+        #expect(latinSession.handle(self.escape))
+        #expect(latinHost.markedText == "これはWindowsです")
+        #expect(latinSession.inputState == .composing)
+        #expect(latinSession.handle(self.escape))
+        #expect(latinHost.markedText.isEmpty)
+        #expect(latinSession.inputState == .none)
+        #expect(latinHost.inserted.isEmpty)
+    }
+
+    @Test("読みを編集中に末尾が n のまま Enter を押すと、見えていた読みのまま ん にして確定する（変換に変わらない）")
+    func enterWhileEditingReadingKeepsReadingWithTrailingN() {
+        let (session, host) = self.makeSession(liveConversion: true)
+        self.type("kyouha", into: session)
+        #expect(host.markedText == "今日は")
+        #expect(session.handle(self.escape))
+        self.type("hon", into: session)
+        #expect(host.markedText == "きょうはほn")
+        #expect(session.handle(self.enter))
+        #expect(host.inserted == ["きょうはほん"])
+        #expect(session.inputState == .none)
+    }
+
+    @Test("英字モードへ切り替えると、未確定文字列は確定される読みの表示になる")
+    func switchingToEnglishShowsTheReadingThatWillBeCommitted() {
+        let (session, host) = self.makeSession(liveConversion: true)
+        self.type("kyouha", into: session)
+        #expect(host.markedText == "今日は")
+        session.inputModeDidChange(to: .english)
+        #expect(host.markedText == "きょうは")
+        #expect(session.handle(self.enter))
+        #expect(host.inserted == ["きょうは"])
+    }
+
+    @Test("入力中の ← → は読みの中でカーソルを動かし、その位置で打ち足しや削除ができる（MS-IME）。ライブ変換の表示はひらがなに戻り、Space で全体を変換する")
+    func arrowKeysMoveTheCaretInsideTheReading() {
+        let left = self.keyCode(123)
+        let right = self.keyCode(124)
+        let (session, host) = self.makeSession(liveConversion: true)
+        self.type("kyouhaiitenkidesu", into: session)
+        #expect(host.markedText == "今日はいい天気です")
+        // ← goes back to the reading and moves the caret before す
+        #expect(session.handle(left))
+        #expect(host.markedText == "きょうはいいてんきです")
+        #expect(host.selectionRange == NSRange(location: 10, length: 0))
+        #expect(session.handle(left))
+        #expect(host.selectionRange == NSRange(location: 9, length: 0))
+        #expect(session.inputState == .composing)
+        // Typing inserts at the caret, and the input stays at its reading
+        self.type("ne", into: session)
+        #expect(host.markedText == "きょうはいいてんきねです")
+        #expect(host.selectionRange == NSRange(location: 10, length: 0))
+        // Backspace deletes the character before the caret
+        #expect(session.handle(self.backspace))
+        #expect(host.markedText == "きょうはいいてんきです")
+        #expect(host.selectionRange == NSRange(location: 9, length: 0))
+        // → moves on, and stays at the end
+        for _ in 0 ..< 3 {
+            #expect(session.handle(right))
+        }
+        #expect(host.selectionRange.location == NSNotFound)
+        #expect(host.markedText == "きょうはいいてんきです")
+        // Space converts the whole reading
+        #expect(session.handle(self.space))
+        #expect(host.markedText == "今日はいい天気です")
+        #expect(session.handle(self.enter))
+        #expect(host.inserted == ["今日はいい天気です"])
+
+        // Enter commits the reading as edited; Esc clears it
+        let (readingSession, readingHost) = self.makeSession(liveConversion: true)
+        self.type("kyouhaiitenkidesu", into: readingSession)
+        #expect(readingSession.handle(self.escape))
+        #expect(readingSession.handle(left))
+        #expect(readingSession.handle(left))
+        self.type("ne", into: readingSession)
+        #expect(readingHost.markedText == "きょうはいいてんきねです")
+        #expect(readingSession.handle(self.enter))
+        #expect(readingHost.inserted == ["きょうはいいてんきねです"])
+        #expect(readingSession.inputState == .none)
+
+        // Without live conversion the reading is shown anyway; ← → move the caret the same way
+        let (plainSession, plainHost) = self.makeSession(liveConversion: false)
+        self.type("kyouha", into: plainSession)
+        #expect(plainSession.handle(left))
+        #expect(plainHost.selectionRange == NSRange(location: 3, length: 0))
+        self.type("ne", into: plainSession)
+        #expect(plainHost.markedText == "きょうねは")
+        #expect(plainSession.handle(self.escape))
+        #expect(plainHost.markedText.isEmpty)
+    }
+
+    @Test("読みの中のカーソルは、英字のまま残る語の手前で止まらず語の中を一字ずつ動き、かなの途中（きょ、てんき）にも立てる")
+    func caretMovesThroughLatinWordsAndInsideKana() {
+        let left = self.keyCode(123)
+        let right = self.keyCode(124)
+        let forwardDelete = self.keyCode(117)
+        let (session, host) = self.makeSession(liveConversion: true)
+        self.type("kyouhaTokyoniikimasu", into: session)
+        #expect(host.markedText == "今日はTokyoに行きます")
+        // The reading keeps Tokyo as typed; as typed its keys read Tおきょ, which the caret never shows
+        var locations: [Int] = []
+        for _ in 0 ..< 10 {
+            #expect(session.handle(left))
+            locations.append(host.selectionRange.location)
+        }
+        #expect(host.markedText == "きょうはTokyoにいきます")
+        #expect(locations == [13, 12, 11, 10, 9, 8, 7, 6, 5, 4])
+        // Typing before the word leaves it a word; Backspace takes what was typed
+        self.type("ne", into: session)
+        #expect(host.markedText == "きょうはねTokyoにいきます")
+        #expect(host.selectionRange == NSRange(location: 5, length: 0))
+        #expect(session.handle(self.backspace))
+        #expect(host.markedText == "きょうはTokyoにいきます")
+        #expect(host.selectionRange == NSRange(location: 4, length: 0))
+        // Inside the word, Backspace takes one letter
+        for _ in 0 ..< 3 {
+            #expect(session.handle(right))
+        }
+        #expect(session.handle(self.backspace))
+        #expect(host.markedText == "きょうはTo" + "yoにいきます")
+        #expect(host.selectionRange == NSRange(location: 6, length: 0))
+        #expect(session.handle(self.enter))
+        #expect(host.inserted == ["きょうはToyoにいきます"])
+
+        // Inside a kana made of several keys (き|ょ, てん|き), the kana is fixed as its characters and the caret stands
+        // between them; what is typed there does not read with them
+        let (kanaSession, kanaHost) = self.makeSession(liveConversion: true)
+        self.type("kyouhaiitenkidesu", into: kanaSession)
+        for _ in 0 ..< 3 {
+            #expect(kanaSession.handle(left))
+        }
+        #expect(kanaHost.markedText == "きょうはいいてんきです")
+        #expect(kanaHost.selectionRange == NSRange(location: 8, length: 0))
+        self.type("ne", into: kanaSession)
+        #expect(kanaHost.markedText == "きょうはいいてんねきです")
+        #expect(kanaHost.selectionRange == NSRange(location: 9, length: 0))
+        for _ in 0 ..< 20 {
+            #expect(kanaSession.handle(left))
+        }
+        #expect(kanaSession.handle(right))
+        #expect(kanaHost.selectionRange == NSRange(location: 1, length: 0))
+        self.type("ka", into: kanaSession)
+        #expect(kanaHost.markedText == "きかょうはいいてんねきです")
+        #expect(kanaSession.handle(forwardDelete))
+        #expect(kanaHost.markedText == "きかうはいいてんねきです")
+        #expect(kanaHost.selectionRange == NSRange(location: 2, length: 0))
+        // Space converts the whole reading, wherever the caret was
+        #expect(kanaSession.handle(self.space))
+        #expect(kanaHost.selectionRange.location == NSNotFound || kanaSession.inputState == .selecting)
+        #expect(kanaHost.markedText.hasSuffix("です"))
+    }
+
+    @Test("ライブ変換で、変換中や文節を編集したあとの Esc は、文節を元に戻してひらがなの入力中に戻る")
+    func escapeAfterConversionGoesBackToReading() {
+        let shiftLeft = self.keyCode(123, modifiers: [.shift])
+        let controlK = KeyEventCore(modifierFlags: [.control], characters: "k", charactersIgnoringModifiers: "k", keyCode: 40)
+        for (name, edits) in [("Space", []), ("Shift+←", [shiftLeft]), ("Ctrl+K", [controlK]), ("Space 2回", [self.space])] {
+            let (session, host) = self.makeSession(liveConversion: true)
+            self.type("kyouhaiitenkidesu", into: session)
+            #expect(session.handle(self.space))
+            let converted = host.markedText
+            for edit in edits {
+                #expect(session.handle(edit))
+            }
+            #expect(session.handle(self.escape))
+            #expect(host.markedText == "きょうはいいてんきです", "\(name) の後の Esc でひらがなに戻る")
+            #expect(session.inputState == .composing, "\(name) の後の Esc で入力中に戻る")
+            #expect(host.inserted.isEmpty)
+            #expect(session.handle(self.space))
+            #expect(host.markedText == converted, "\(name) の後に戻すと、文節の区切りも最初の変換に戻る")
+        }
+        // A segment already committed stays committed, and the rest goes back to its reading (macOS style: → commits
+        // the first clause)
+        let (session, host) = self.makeSession(keyBindingStyle: .macOS, liveConversion: true)
+        self.type("kyouhaiitenkidesu", into: session)
+        #expect(session.handle(self.space))
+        #expect(session.handle(self.keyCode(124)))
+        #expect(host.inserted == ["今日は"])
+        #expect(session.handle(self.escape))
+        #expect(host.markedText == "いいてんきです")
+        #expect(session.inputState == .composing)
+        // MS-IME style: → only moves on to the next clause, so nothing is committed and the whole input goes back to
+        // its reading
+        let (msSession, msHost) = self.makeSession(liveConversion: true)
+        self.type("kyouhaiitenkidesu", into: msSession)
+        #expect(msSession.handle(self.space))
+        #expect(msSession.handle(self.keyCode(124)))
+        #expect(msHost.inserted.isEmpty)
+        #expect(msSession.handle(self.escape))
+        #expect(msHost.markedText == "きょうはいいてんきです")
+        #expect(msSession.inputState == .composing)
+    }
+
     @Test("先頭を大文字で打つと英字のまま確定できる（ライブ変換がオフのときは確定まで英字）")
     func uppercaseStartsAlphabetWord() {
         let (session, host) = self.makeSession()
@@ -374,12 +600,16 @@ struct InputSessionTests {
         }
     }
 
-    @Test("Ctrl+I でカタカナに変換して確定する")
+    @Test("Ctrl+I でカタカナに変換し、Enter で確定する")
     func controlIConvertsToKatakana() {
         let (session, host) = self.makeSession(keyBindingStyle: .msIME)
         self.type("tenki", into: session)
         let controlI = KeyEventCore(modifierFlags: [.control], characters: "\t", charactersIgnoringModifiers: "i", keyCode: 34)
         #expect(session.handle(controlI))
+        #expect(host.markedText == "テンキ")
+        #expect(host.inserted.isEmpty, "\(host.inserted)")
+        #expect(session.inputState == .selecting)
+        #expect(session.handle(self.enter))
         #expect(host.inserted == ["テンキ"])
         #expect(session.inputState == .none)
     }
@@ -425,15 +655,30 @@ struct InputSessionTests {
         #expect(session.inputState == .none)
     }
 
-    @Test("候補ウィンドウのクリックで候補を確定する")
+    @Test("候補ウィンドウのクリックは、MS-IME では候補を選んで次の文節へ進み、macOS 標準では確定する")
     func candidateWindowSubmission() {
-        let (session, host) = self.makeSession()
+        let (session, host) = self.makeSession(keyBindingStyle: .macOS)
         self.type("sakura", into: session)
         #expect(session.handle(self.space))
         session.selectCandidateRow(0)
         session.submitCandidateFromWindow()
         #expect(host.inserted.count == 1)
         #expect(host.markedText.isEmpty)
+
+        // MS-IME: the clause chosen stays shown, with the rest; Enter commits them all
+        let (msSession, msHost) = self.makeSession(keyBindingStyle: .msIME)
+        self.type("kyouhasakura", into: msSession)
+        #expect(msSession.handle(self.space))
+        #expect(msSession.handle(self.space))
+        msSession.selectCandidateRow(1)
+        let chosen = msSession.segmentsManager.selectedCandidate?.text ?? ""
+        msSession.submitCandidateFromWindow()
+        #expect(msHost.inserted.isEmpty)
+        #expect(msSession.inputState == .selecting)
+        #expect(msHost.markedText.hasPrefix(chosen), "\(chosen) / \(msHost.markedText)")
+        #expect(msSession.handle(self.enter))
+        #expect(msHost.inserted.count == 1)
+        #expect(msHost.inserted.joined().hasPrefix(chosen), "\(chosen) / \(msHost.inserted)")
     }
 
     // MARK: - Continuation
@@ -1012,9 +1257,26 @@ struct InputSessionTests {
         #expect(host.markedText == "らーめん「")
     }
 
-    @Test("Zenzai なしでも → で文節を一つずつ確定し、最後から二番目の文節を確定しても最後の文節は残る")
-    func secondToLastClauseCommitsAloneWithoutZenzai() {
+    @Test("Zenzai なしでも → で文節を一つずつ移り、確定は Enter でまとめて行う")
+    func clausesMoveOneByOneWithoutZenzai() {
         let (session, host) = self.makeSession(liveConversion: true)
+        self.type("watashihaashitatoukyouniikimasu", into: session)
+        #expect(session.handle(self.space))
+        #expect(host.markedText == "私は明日東京に行きます")
+        let right = KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 124)
+        for _ in 0 ..< 3 {
+            #expect(session.handle(right))
+        }
+        #expect(host.inserted.isEmpty, "\(host.inserted)")
+        #expect(host.markedText == "私は明日東京に行きます")
+        #expect(session.handle(self.enter))
+        #expect(host.inserted == ["私は明日東京に行きます"])
+        #expect(host.markedText.isEmpty)
+    }
+
+    @Test("macOS 標準のキー操作では、→ は先頭の文節を確定して次の文節へ進む")
+    func rightArrowCommitsTheFirstClauseInMacOSStyle() {
+        let (session, host) = self.makeSession(keyBindingStyle: .macOS, liveConversion: true)
         self.type("watashihaashitatoukyouniikimasu", into: session)
         #expect(session.handle(self.space))
         let right = KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 124)
@@ -1023,6 +1285,103 @@ struct InputSessionTests {
         }
         #expect(host.inserted.joined() == "私は明日東京に", "\(host.inserted)")
         #expect(host.markedText == "行きます")
+    }
+
+    @Test("文節を移ったあとの BackSpace と Esc は、移った文節も含めてひらがなに戻す")
+    func backspaceAndEscapeAfterMovingClauses() {
+        let right = KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 124)
+        let backspace = KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 51)
+        let escape = KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 53)
+
+        let (session, host) = self.makeSession(liveConversion: true)
+        self.type("kyouhaiitenkidesune", into: session)
+        #expect(session.handle(self.space))
+        #expect(session.handle(right))
+        #expect(session.handle(backspace))
+        #expect(host.markedText == "きょうはいいてんきですね")
+        #expect(host.inserted.isEmpty)
+        #expect(session.handle(self.enter))
+        #expect(host.inserted == ["きょうはいいてんきですね"])
+
+        let (escSession, escHost) = self.makeSession(liveConversion: true)
+        self.type("kyouhaiitenkidesune", into: escSession)
+        #expect(escSession.handle(self.space))
+        #expect(escSession.handle(right))
+        #expect(escSession.handle(escape))
+        #expect(escSession.inputState == .composing)
+        // Esc goes back to the reading, as it does for a conversion without clauses moved (see
+        // escapeAfterConversionGoesBackToReading); Enter then commits the reading
+        #expect(escHost.markedText == "きょうはいいてんきですね")
+        #expect(escHost.inserted.isEmpty)
+        #expect(escSession.handle(self.enter))
+        #expect(escHost.inserted == ["きょうはいいてんきですね"])
+    }
+
+    @Test("MS-IME では F6〜F10 は確定せず、入力をその形で見せる。続けて押すと MS-IME と同じに変わり、Enter で確定する")
+    func functionKeysChangeTheFormWithoutCommitting() {
+        let f6 = KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 97)
+        let f7 = KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 98)
+        let f8 = KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 100)
+        let f9 = KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 101)
+        let f10 = KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 109)
+
+        let (session, host) = self.makeSession(liveConversion: true)
+        self.type("toukyou", into: session)
+        let shown: [(KeyEventCore, String)] = [
+            (f7, "トウキョウ"), (f7, "トウキョう"), (f7, "トウキょう"),
+            (f6, "とうきょう"), (f6, "とうきょウ"),
+            (f8, "ﾄｳｷｮｳ"), (f8, "ﾄｳｷｮう"),
+            (f10, "toukyou"), (f10, "TOUKYOU"), (f10, "Toukyou"), (f10, "toukyou"),
+            (f9, "ｔｏｕｋｙｏｕ"), (f9, "ＴＯＵＫＹＯＵ")
+        ]
+        for (key, text) in shown {
+            #expect(session.handle(key))
+            #expect(host.markedText == text)
+            #expect(session.inputState == .selecting)
+            #expect(host.inserted.isEmpty, "\(host.inserted)")
+        }
+        #expect(session.handle(self.enter))
+        #expect(host.inserted == ["ＴＯＵＫＹＯＵ"])
+        #expect(host.markedText.isEmpty)
+
+        // macOS standard: committed at once, as before
+        let (macSession, macHost) = self.makeSession(keyBindingStyle: .macOS, liveConversion: true)
+        self.type("toukyou", into: macSession)
+        #expect(macSession.handle(f7))
+        #expect(macHost.inserted == ["トウキョウ"])
+        #expect(macSession.inputState == .none)
+    }
+
+    @Test("文節に F7 を押すとその文節だけカタカナになり、→ で次の文節へ移れて、Enter でまとめて確定する")
+    func functionKeyChangesOnlyTheClause() {
+        let f7 = KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 98)
+        let right = KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 124)
+        let (session, host) = self.makeSession(liveConversion: true)
+        self.type("kyouhaiitenkidesune", into: session)
+        #expect(session.handle(self.space))
+        #expect(session.handle(right))
+        #expect(session.handle(f7))
+        #expect(host.markedText == "今日はイイ天気ですね")
+        #expect(host.inserted.isEmpty, "\(host.inserted)")
+        if case .selecting = session.candidateWindow {
+            Issue.record("The candidate list should close when a function key changes the clause")
+        }
+        // Space opens the list again, the katakana form first and the next candidate selected, as Space does; ↑ goes
+        // back to the katakana form
+        #expect(session.handle(self.space))
+        guard case .selecting(let candidates, let index) = session.candidateWindow else {
+            Issue.record("Space should show the candidates again")
+            return
+        }
+        #expect(candidates.first?.text == "イイ")
+        #expect(index == 1)
+        #expect(host.markedText == "今日はいい天気ですね")
+        #expect(session.handle(KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 126)))
+        #expect(host.markedText == "今日はイイ天気ですね")
+        #expect(session.handle(right))
+        #expect(host.markedText == "今日はイイ天気ですね")
+        #expect(session.handle(self.enter))
+        #expect(host.inserted == ["今日はイイ天気ですね"])
     }
 
     @Test("記号は普段は全角で入力される")

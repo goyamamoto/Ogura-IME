@@ -77,9 +77,12 @@ public struct MLXContinuationProvider: ContinuationProvider {
                     let promptTokens = await self.promptTokens(tokenizer: tokenizer, leftContext: leftContext)
                     let stopTokenIds = await container.perform { Self.stopTokenIds(context: $0) }
                     let fillerTokenIds = await MLXModelCache.shared.fillerTokens(for: self.modelDirectory) { Self.fillerTokenIds(tokenizer: tokenizer) }
+                    // The tokens that end the reply stay allowed (after the first content tokens), the other control tokens never
+                    let controlTokenIds = await MLXModelCache.shared.controlTokens(for: self.modelDirectory) { Self.controlTokenIds(tokenizer: tokenizer) }
+                        .subtracting(stopTokenIds)
                     let banFillers = Self.endsWithPunctuation(leftContext)
                     let components = GenerationComponents(logitProcessorFactory: {
-                        MinimumTokensProcessor(stopTokenIds: stopTokenIds, fillerTokenIds: fillerTokenIds, banFillers: banFillers, minimumTokens: Self.minimumTokens)
+                        MinimumTokensProcessor(stopTokenIds: stopTokenIds, fillerTokenIds: fillerTokenIds, banFillers: banFillers, minimumTokens: Self.minimumTokens, controlTokenIds: controlTokenIds)
                     })
                     try await container.perform { (context: ModelContext) in
                         let input = LMInput(tokens: MLXArray(promptTokens))
@@ -157,6 +160,23 @@ public struct MLXContinuationProvider: ContinuationProvider {
                 continue
             }
             if Self.isFiller(tokenizer.decode(tokenIds: [id], skipSpecialTokens: false)) {
+                ids.insert(id)
+            }
+        }
+        return ids
+    }
+
+    /// IDs of the chat format's control tokens (see `ContinuationPrompt.isControlToken`), found by scanning the vocabulary once as
+    /// `fillerTokenIds` does. They are banned throughout generation (see `MinimumTokensProcessor`): Gemma 4 given its draft as
+    /// the start of its reply sometimes closed a thinking channel it never opened (<channel|>) and answered the request instead
+    /// of going on, and the marker, decoded as text, showed in the IME. The caller leaves out the tokens that end the reply
+    static func controlTokenIds(tokenizer: any MLXLMCommon.Tokenizer) -> Set<Int> {
+        guard let bridge = tokenizer as? TokenizerBridge else {
+            return []
+        }
+        var ids: Set<Int> = []
+        for id in 0 ..< bridge.vocabularySize {
+            if let raw = bridge.convertIdToToken(id), raw.count <= 40, ContinuationPrompt.isControlToken(raw) {
                 ids.insert(id)
             }
         }

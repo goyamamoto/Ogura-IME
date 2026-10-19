@@ -24,3 +24,5 @@ DerivedData/
 **/xcshareddata/WorkspaceSettings.xcsettings
 !*.xcworkspace/contents.xcworkspacedata
 *.profraw
+# Built by Tools/build_genmai_gguf.sh from genmai's published weights
+Ogura/Resources/genmai/*.gguf
