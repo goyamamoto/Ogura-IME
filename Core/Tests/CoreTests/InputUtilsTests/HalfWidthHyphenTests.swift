@@ -6,7 +6,8 @@ import Testing
 private let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
-/// With symbols typed in half width, a hyphen typed after a Latin word or a digit is -, not the long vowel mark ー
+/// A hyphen typed after a Latin word or a digit is -, not the long vowel mark ー, whether symbols are typed in half width
+/// or not
 @MainActor
 private final class RecordingHost: InputSessionHost {
     var inserted: [String] = []
@@ -30,8 +31,7 @@ private func committed(_ keys: String, halfWidthSymbols: Bool, learned: Bool = f
             useZenzai: false,
             liveConversionEnabled: true,
             learnedScriptIdentification: learned,
-            scriptModelDirectoryURL: repository.appendingPathComponent("Ogura/Resources/ScriptModel", isDirectory: true),
-            typeHalfWidthSymbols: halfWidthSymbols
+            scriptModelDirectoryURL: repository.appendingPathComponent("Ogura/Resources/ScriptModel", isDirectory: true)
         )
     )
     let session = InputSession(segmentsManager: manager, settingsProvider: {
@@ -48,18 +48,18 @@ private func committed(_ keys: String, halfWidthSymbols: Bool, learned: Bool = f
 }
 
 @MainActor
-@Test("記号を半角で入力するとき、英単語や数字の後のハイフンは半角（UTF-8、COVID-19、3-2-1、iPhone-から）")
-func hyphenAfterLatinWordOrDigitIsHalfWidth() {
-    #expect(committed("UTF-8", halfWidthSymbols: true) == "UTF-8")
-    #expect(committed("COVID-19", halfWidthSymbols: true) == "COVID-19")
-    #expect(committed("3-2-1", halfWidthSymbols: true) == "3-2-1")
+@Test("英単語や数字の後のハイフンは、記号を半角で入力する設定でなくても半角（UTF-8、COVID-19、3-2-1、iPhone-から、us-west-1）", arguments: [true, false])
+func hyphenAfterLatinWordOrDigitIsHalfWidth(halfWidthSymbols: Bool) {
+    #expect(committed("UTF-8", halfWidthSymbols: halfWidthSymbols) == "UTF-8")
+    #expect(committed("COVID-19", halfWidthSymbols: halfWidthSymbols) == "COVID-19")
+    #expect(committed("3-2-1", halfWidthSymbols: halfWidthSymbols) == "3-2-1")
     // After a word the identification layer tells as Latin (the model knows iPhone; the rules read it as 異Phoね)
-    #expect(committed("iPhone-kara", halfWidthSymbols: true, learned: true) == "iPhone-から")
+    #expect(committed("iPhone-kara", halfWidthSymbols: halfWidthSymbols, learned: true) == "iPhone-から")
+    #expect(committed("us-west-1nidepuroishita", halfWidthSymbols: halfWidthSymbols, learned: true).hasPrefix("us-west-1に"))
 }
 
 @MainActor
-@Test("かなの後の - は長音のまま（コーヒー）。設定がオフなら英単語の後も長音")
-func hyphenAfterKanaIsTheLongVowelMark() {
-    #expect(committed("ko-hi-wonomu", halfWidthSymbols: true).hasPrefix("コーヒー"))
-    #expect(!committed("COVID-19", halfWidthSymbols: false).contains("-"))
+@Test("かなの後の - は長音のまま（コーヒー）", arguments: [true, false])
+func hyphenAfterKanaIsTheLongVowelMark(halfWidthSymbols: Bool) {
+    #expect(committed("ko-hi-wonomu", halfWidthSymbols: halfWidthSymbols).hasPrefix("コーヒー"))
 }

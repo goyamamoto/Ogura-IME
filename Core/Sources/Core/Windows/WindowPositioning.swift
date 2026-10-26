@@ -48,41 +48,42 @@ public enum WindowPositioning {
         }
     }
 
-    public static func frameNearCursor(
-        currentFrame: Rect,
+    /// The frame of a candidate window for the text on `lineRect` (a line of the client's text, in screen coordinates
+    /// with y going up): right below the line, or right above it when the screen has no room below, and moved left by
+    /// `textOffset` so that the candidates start where the text they are for starts, as Mozc and the system's input
+    /// methods place theirs. A line with no height (a client that reports only a point) is taken as `lineHeight` tall.
+    public static func candidateWindowFrame(
+        lineRect: Rect,
+        textOffset: Double,
+        size: Size,
         screenRect: Rect,
-        cursorLocation: Point,
-        desiredSize: Size,
-        cursorHeight: Double = 16
+        gap: Double = 2,
+        lineHeight: Double = 16
     ) -> Rect {
-        var newWindowFrame = currentFrame
-        newWindowFrame.size = desiredSize
-
-        let cursorY = cursorLocation.y
-        if cursorY - desiredSize.height < screenRect.origin.y {
-            newWindowFrame.origin = Point(x: cursorLocation.x, y: cursorLocation.y + cursorHeight)
-        } else {
-            newWindowFrame.origin = Point(x: cursorLocation.x, y: cursorLocation.y - desiredSize.height - cursorHeight)
+        let lineTop = lineRect.height > 0 ? lineRect.maxY : lineRect.minY + lineHeight
+        var frame = Rect(origin: Point(x: lineRect.minX - textOffset, y: lineRect.minY - gap - size.height), size: size)
+        if frame.minY < screenRect.minY {
+            frame.origin.y = lineTop + gap
         }
 
         // Horizontal clamping. First fit the right edge inside screenRect.
         // If the window cannot fit (for example, it is wider than screenRect), align it to minX in the end.
-        if newWindowFrame.maxX > screenRect.maxX {
-            newWindowFrame.origin.x = screenRect.maxX - newWindowFrame.width
+        if frame.maxX > screenRect.maxX {
+            frame.origin.x = screenRect.maxX - frame.width
         }
-        if newWindowFrame.minX < screenRect.minX {
-            newWindowFrame.origin.x = screenRect.minX
+        if frame.minX < screenRect.minX {
+            frame.origin.x = screenRect.minX
         }
 
         // Vertical clamping. First fit the top edge (maxY) inside screenRect.
         // If the window cannot fit (for example, it is taller than screenRect), align it to minY in the end.
-        if newWindowFrame.maxY > screenRect.maxY {
-            newWindowFrame.origin.y = screenRect.maxY - newWindowFrame.height
+        if frame.maxY > screenRect.maxY {
+            frame.origin.y = screenRect.maxY - frame.height
         }
-        if newWindowFrame.minY < screenRect.minY {
-            newWindowFrame.origin.y = screenRect.minY
+        if frame.minY < screenRect.minY {
+            frame.origin.y = screenRect.minY
         }
-        return newWindowFrame
+        return frame
     }
 
     public static func frameRightOfAnchor(

@@ -12,12 +12,12 @@ class CandidatesViewController: BaseCandidateViewController {
     private var showedRows: ClosedRange = 0...8
     var showCandidateIndex = false
 
-    override func updateCandidatePresentations(_ candidates: [CandidatePresentation], selectionIndex: Int?, cursorLocation: CGPoint) {
+    override func updateCandidatePresentations(_ candidates: [CandidatePresentation], selectionIndex: Int?, lineRect: CGRect) {
         self.showedRows = selectionIndex == nil ? 0...8 : self.showedRows
         super.updateCandidatePresentations(
             candidates,
             selectionIndex: selectionIndex,
-            cursorLocation: cursorLocation
+            lineRect: lineRect
         )
     }
 
@@ -36,50 +36,20 @@ class CandidatesViewController: BaseCandidateViewController {
     }
 
     override internal func configureCellView(_ cell: CandidateTableCellView, forRow row: Int) {
-        let candidate = self.candidates[row].candidate
         let annotationText = self.candidates[row].displayContext.annotationText
-        let isWithinShowedRows = self.showedRows.contains(row)
-        let displayIndex = row - self.showedRows.lowerBound + 1 // Position relative to the lower bound of showedRows
-        let displayText: String
-
-        if isWithinShowedRows && self.showCandidateIndex {
-            if displayIndex > 9 {
-                displayText = " " + candidate.text // Adjust the indent when the row number is 10 or more
-            } else {
-                displayText = "\(displayIndex). " + candidate.text
-            }
-        } else {
-            displayText = candidate.text // No number outside the showedRows range
-        }
-
-        // Set the number part and the candidate part separately
-        let attributedString = NSMutableAttributedString(string: displayText)
-        let numberRange = (displayText as NSString).range(of: "\(displayIndex).")
-
-        if numberRange.location != NSNotFound {
-            attributedString.addAttributes([
-                .font: NSFont.monospacedSystemFont(ofSize: 8, weight: .regular),
-                .foregroundColor: currentSelectedRow == row ? NSColor.white : NSColor.gray,
-                .baselineOffset: 2
-            ], range: numberRange)
-        }
-
-        cell.candidateTextField.attributedStringValue = attributedString
-
+        cell.candidateTextField.stringValue = self.candidates[row].candidate.text
+        // The rows the number keys choose (see `getNumberCandidate`) have their numbers; the others leave the column
+        // empty, so the text of all rows starts at the same place
+        cell.showNumberColumn(self.showCandidateIndex)
+        cell.numberTextField.stringValue = self.showedRows.contains(row) ? "\(row - self.showedRows.lowerBound + 1)" : ""
         if let annotationText {
-            let annotationString = NSAttributedString(
-                string: annotationText,
-                attributes: [
-                    .font: NSFont.systemFont(ofSize: 12),
-                    .foregroundColor: currentSelectedRow == row ? NSColor.white : NSColor.systemGray
-                ]
-            )
             cell.showCandidateAnnotationTextField(true)
-            cell.candidateAnnotationTextField.attributedStringValue = annotationString
+            cell.candidateAnnotationTextField.stringValue = annotationText
         } else {
             cell.showCandidateAnnotationTextField(false)
             cell.candidateAnnotationTextField.stringValue = ""
         }
+        cell.applyColors(selected: row == self.currentSelectedRow)
     }
 
     func getNumberCandidate(num: Int) -> Int {
@@ -96,13 +66,16 @@ class CandidatesViewController: BaseCandidateViewController {
         min(9, self.tableView.numberOfRows)
     }
 
+    override var textOffset: CGFloat {
+        CandidateWindowStyle.leadingInset + (self.showCandidateIndex ? CandidateWindowStyle.numberColumnWidth : 0)
+    }
+
     override func getWindowWidth(maxContentWidth: CGFloat) -> CGFloat {
-        let hasAnnotation = self.candidates.contains { $0.displayContext.annotationText != nil }
-        if self.showCandidateIndex {
-            return maxContentWidth + 48 + (hasAnnotation ? 56 : 0)
-        } else {
-            return maxContentWidth + 20 + (hasAnnotation ? 56 : 0)
-        }
+        let annotations = self.candidates.compactMap(\.displayContext.annotationText)
+        let annotationWidth = annotations.isEmpty
+            ? 0
+            : CandidateWindowStyle.annotationGap + self.getMaxTextWidth(candidates: annotations, font: CandidateWindowStyle.annotationFont)
+        return super.getWindowWidth(maxContentWidth: maxContentWidth + annotationWidth)
     }
 }
 
@@ -120,7 +93,7 @@ class PredictionCandidatesViewController: BaseCandidateViewController {
         let attributedString = NSMutableAttributedString()
 
         let isSelected = currentSelectedRow == row
-        let candidateColor = isSelected ? NSColor.white : NSColor.labelColor
+        let candidateColor = isSelected ? NSColor.alternateSelectedControlTextColor : NSColor.labelColor
 
         if let symbol = NSImage(systemSymbolName: prefixSymbolName, accessibilityDescription: nil) {
             let config = NSImage.SymbolConfiguration(pointSize: prefixFontSize, weight: .regular)
@@ -134,7 +107,7 @@ class PredictionCandidatesViewController: BaseCandidateViewController {
         let candidateAttributed = NSAttributedString(
             string: candidateText,
             attributes: [
-                .font: NSFont.systemFont(ofSize: 18),
+                .font: CandidateWindowStyle.font,
                 .foregroundColor: candidateColor
             ]
         )
@@ -149,10 +122,13 @@ class PredictionCandidatesViewController: BaseCandidateViewController {
         paragraphStyle.defaultTabInterval = prefixTabStop
         attributedString.addAttribute(.paragraphStyle, value: paragraphStyle, range: fullRange)
 
+        cell.showNumberColumn(false)
+        cell.showCandidateAnnotationTextField(false)
         cell.candidateTextField.attributedStringValue = attributedString
     }
 
-    override func getWindowWidth(maxContentWidth: CGFloat) -> CGFloat {
-        maxContentWidth + prefixTabStop + 20
+    // The arrow goes before the text, so the text starts one tab stop further in
+    override var textOffset: CGFloat {
+        CandidateWindowStyle.leadingInset + self.prefixTabStop
     }
 }

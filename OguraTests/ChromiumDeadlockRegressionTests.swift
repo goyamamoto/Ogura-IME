@@ -7,7 +7,7 @@
 /// Why it is safe:
 /// - activateServer passes an empty candidate array, so `resizeWindowToFitContent` in
 ///   BaseCandidateViewController returns early on `numberOfVisibleRows == 0`, and
-///   cursorLocation is not used to compute the window position.
+///   lineRect is not used to compute the window position.
 /// - As long as this stays true, removing the client query in activateServer does not
 ///   affect any feature.
 
@@ -26,7 +26,7 @@ final class ChromiumDeadlockRegressionTests: XCTestCase {
     func test空配列でupdateCandidatePresentationsを呼ぶとnumberOfVisibleRowsが0になる() {
         let vc = CandidatesViewController()
         _ = vc.view // Force loadView to run
-        vc.updateCandidatePresentations([], selectionIndex: nil, cursorLocation: .zero)
+        vc.updateCandidatePresentations([], selectionIndex: nil, lineRect: .zero)
         XCTAssertEqual(
             vc.numberOfVisibleRows,
             0,
@@ -39,7 +39,7 @@ final class ChromiumDeadlockRegressionTests: XCTestCase {
     func test空配列でupdateCandidatePresentationsを呼ぶとcandidatesが空になる() {
         let vc = CandidatesViewController()
         _ = vc.view
-        vc.updateCandidatePresentations([], selectionIndex: nil, cursorLocation: .zero)
+        vc.updateCandidatePresentations([], selectionIndex: nil, lineRect: .zero)
         XCTAssertTrue(vc.candidates.isEmpty, "空の候補配列を渡した後、candidates は空でなければならない")
     }
 
@@ -49,10 +49,10 @@ final class ChromiumDeadlockRegressionTests: XCTestCase {
         let vc = CandidatesViewController()
         _ = vc.view
         let dummy = CandidatePresentation(candidate: Candidate(text: "テスト", value: 0, composingCount: .surfaceCount(0), lastMid: 0, data: []))
-        vc.updateCandidatePresentations([dummy], selectionIndex: nil, cursorLocation: .zero)
+        vc.updateCandidatePresentations([dummy], selectionIndex: nil, lineRect: .zero)
         XCTAssertEqual(vc.numberOfVisibleRows, 1, "候補が1件の状態を前提とする")
 
-        vc.updateCandidatePresentations([], selectionIndex: nil, cursorLocation: .zero)
+        vc.updateCandidatePresentations([], selectionIndex: nil, lineRect: .zero)
         XCTAssertEqual(
             vc.numberOfVisibleRows,
             0,

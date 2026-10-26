@@ -41,6 +41,8 @@
 				<string>en.tiff</string>
 				<key>TISIntendedLanguage</key>
 				<string>en</string>
+				<key>TICapsLockLanguageSwitchCapable</key>
+				<true/>
 				<key>TISIconIsTemplate</key>
 				<true/>
 			</dict>
@@ -72,6 +74,8 @@
 				<string>main.tiff</string>
 				<key>TISIntendedLanguage</key>
 				<string>ja</string>
+				<key>TICapsLockLanguageSwitchCapable</key>
+				<true/>
 				<key>TISIconIsTemplate</key>
 				<true/>
 			</dict>
@@ -79,6 +83,8 @@
 	</dict>
 	<key>TISIntendedLanguage</key>
 	<string>ja</string>
+	<key>TICapsLockLanguageSwitchCapable</key>
+	<true/>
 	<key>NSPrincipalClass</key>
 	<string>$(PRODUCT_MODULE_NAME).NSManualApplication</string>
 	<key>InputMethodConnectionName</key>

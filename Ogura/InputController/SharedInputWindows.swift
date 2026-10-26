@@ -51,7 +51,7 @@ final class SharedInputWindows {
             window.setIsVisible(false)
             window.orderOut(nil)
         }
-        self.candidatesViewController.updateCandidatePresentations([], selectionIndex: nil, cursorLocation: .zero)
+        self.candidatesViewController.updateCandidatePresentations([], selectionIndex: nil, lineRect: .zero)
         self.candidatesViewController.hide()
     }
 }

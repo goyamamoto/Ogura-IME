@@ -28,7 +28,7 @@ final class CandidateSelectionFeedbackTests: XCTestCase {
                 CandidatePresentation(candidate: Candidate(text: "候補2", value: 0, composingCount: .surfaceCount(0), lastMid: 0, data: []))
             ],
             selectionIndex: 1,
-            cursorLocation: .zero
+            lineRect: .zero
         )
 
         XCTAssertEqual(controller.currentSelectedRow, 1)
@@ -46,7 +46,7 @@ final class CandidateSelectionFeedbackTests: XCTestCase {
                 CandidatePresentation(candidate: Candidate(text: "候補2", value: 0, composingCount: .surfaceCount(0), lastMid: 0, data: []))
             ],
             selectionIndex: 0,
-            cursorLocation: .zero
+            lineRect: .zero
         )
 
         controller.selectNextCandidate()

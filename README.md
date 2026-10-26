@@ -23,6 +23,33 @@ macOS 向けの日本語入力システムです。[azooKey on macOS](https://gi
 - **続きを書く**: 書きかけの文の後ろで Shift+Tab を押すと、ローカル LLM（標準は macOS 26 の Apple Intelligence）が続きを書き足す。気に入れば Tab、違えばもう一度押して別の案
 - **ネットワークに出ない**: 通信するコードも権限も持たず、テストで固定
 
+## macOS 標準の日本語入力との比較
+
+かな漢字変換の公開ベンチマーク [AJIMEE-Bench](https://github.com/azooKey/AJIMEE-Bench) の 200 問で、変換結果が正解と一致した割合です。どちらも学習のない、入れたばかりの状態で測りました。
+
+| | Ogura | macOS 標準（ライブ変換） |
+| --- | --- | --- |
+| 全 200 問 | **93.5%** | 68.5% |
+| 前の文脈がある 100 問 | **89%** | 65% |
+| 前の文脈がない 100 問 | **98%** | 72% |
+
+参考までに、AJIMEE-Bench で公表されている前の文脈がない問題の値は、MS-IME が 58.5%、Google 日本語入力が 57.5% です。
+
+実際に変換した例です。
+
+| 打つキー | Ogura | macOS 標準 |
+| --- | --- | --- |
+| `kokodehakimonowonuidekudasai.dosokugennkinndesu.` | ここで**履物**を脱いでください。土足厳禁です。 | ここでは**着物**を脱いでください。土足厳禁です。 |
+| `kokodehakimonowonuidekudasai.youfukunomidesu.` | ここでは**着物**を脱いでください。洋服のみです。 | ここでは**着物**を脱いでください。洋服のみです。 |
+| `atsuihonnwoyomu.` | **厚い**本を読む。 | **熱い**本を読む。 |
+| `byoukigakaihounimukau.` | 病気が**快方**に向かう。 | 病気が**解放**に向かう。 |
+| `kaisatsudeunnchinnwoseisannsuru.` | 改札で運賃を**精算**する。 | 改札で運賃を**生産**する。 |
+| `gennkouwokouseishitekarainnsatsusuru.` | 原稿を**校正**してから印刷する。 | 原稿を**構成**してから印刷する。 |
+| `kyouhagithubnipushsita` | 今日は**GitHub**に**push**した | 今日は**義tふb**に**ぷsh**した |
+| `vue.jsdeus-west-1nidepuroishita.` | **vue.js**で**us-west-1**にデプロイした。 | **ヴ絵。js**で**うsーウェstー1**にデプロイした。 |
+
+Ogura の値は、各問題の読みをローマ字で一打ずつ打ち、Enter で確定した結果です。macOS 標準の値は、読みを macOS の変換エンジンにライブ変換と同じ設定で一度に渡し、前の文脈がある問題はその文脈も渡して得た第一候補です。変換例の macOS 標準の欄も同じ方法で、打ったキーを一般的なローマ字の規則でかなに直して渡しました（大文字とかなにならない文字はそのまま）。実際のライブ変換は打つたびに前の変換を引き継ぐので、一文ずつ打つと結果が少し変わることがあります。
+
 ## 動作環境
 
 macOS 15 以降、Apple Silicon の Mac が必要です。「続きを書く」で Apple の端末内モデルを使うには macOS 26 以降が必要です。
@@ -32,7 +59,7 @@ macOS 15 以降、Apple Silicon の Mac が必要です。「続きを書く」�
 Apple Silicon の Mac と macOS 15 以降で動きます。[Releases](https://github.com/goyamamoto/Ogura-IME/releases) の pkg を開いてインストールします（管理者のパスワードを求められます）。pkg は Apple の Developer ID で署名していないので、初めて開くときに macOS が止めます。「システム設定」>「プライバシーとセキュリティ」の一番下に出る「このまま開く」を押すと進みます。ターミナルから入れる場合、この手順は要りません。
 
 ```sh
-sudo installer -pkg ~/Downloads/Ogura-1.1-unsigned.pkg -target /
+sudo installer -pkg ~/Downloads/Ogura-1.1.1-unsigned.pkg -target /
 ```
 
 インストールしたアカウントでは、すぐに入力ソースの一覧に Ogura が出ます。ほかのアカウントでは、ログインし直すと出ます。一覧に出ないときは、ログアウトして再ログインしてください。

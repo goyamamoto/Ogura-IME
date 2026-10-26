@@ -71,7 +71,6 @@ public final class SegmentsManager {
             zenzaiSecondOpinionWeight: Float? = nil,
             zenzaiSecondOpinionThreshold: Float? = nil,
             zenzaiLearning: ZenzaiLearning? = nil,
-            typeHalfWidthSymbols: Bool? = nil,
             clauseCandidatesOnly: Bool? = nil,
             readingJudge: (any ReadingJudge)? = nil,
             judgeWeights: JudgeWeights? = nil,
@@ -93,7 +92,6 @@ public final class SegmentsManager {
             if let zenzaiLearning {
                 self.zenzaiLearning = zenzaiLearning
             }
-            self.typeHalfWidthSymbols = typeHalfWidthSymbols
             self.clauseCandidatesOnly = clauseCandidatesOnly
             self.readingJudge = readingJudge
             if let judgeWeights {
@@ -135,9 +133,6 @@ public final class SegmentsManager {
         /// Where the learned identification layer is (tagger.bin, with the files it reads; see `TaggerScriptIdentifier`).
         /// If nil, the one in the resources (ScriptModel)
         var scriptModelDirectoryURL: URL?
-        /// Whether symbols are typed in half width, which makes a hyphen after a Latin word or a digit half width too
-        /// (see `halfWidthHyphens`). If nil, follow the setting (Config.TypeHalfWidthSymbols)
-        var typeHalfWidthSymbols: Bool?
         /// Whether the candidates listed for a clause are those for its reading, as in MS-IME (see `clauseCandidates`).
         /// If nil, so when the key bindings are MS-IME's (Config.KeyBindingStyle)
         var clauseCandidatesOnly: Bool?
@@ -1679,7 +1674,7 @@ public final class SegmentsManager {
             return nil
         }
         var segmentation = self.scriptIdentifier.segment(input)
-        guard !segmentation.isEmpty || !self.halfWidthHyphens(in: input, latinWords: []).isEmpty else {
+        guard !segmentation.isEmpty || self.hasHalfWidthMarks(in: input) else {
             return nil
         }
         if self.context.useZenzai, !segmentation.uncertainWords.isEmpty {
@@ -1720,7 +1715,7 @@ public final class SegmentsManager {
             conversion.otherReading = (reading.text, reading.words)
         }
         // Words checked as letters and left as Japanese, with nothing to offer either: the input as it is
-        if segmentation.isEmpty, conversion.otherReading == nil, self.halfWidthHyphens(in: input, latinWords: []).isEmpty {
+        if segmentation.isEmpty, conversion.otherReading == nil, !self.hasHalfWidthMarks(in: input) {
             return nil
         }
         return conversion
@@ -2051,8 +2046,14 @@ public final class SegmentsManager {
     /// What the converter sees for `segmentation` of `input` (see `latinWordsConversionText`)
     private func conversion(of input: TypedInput, segmentation: ScriptSegmentation) -> LatinWordsConversion {
         var elements = self.composingText.input
+        let punctuation = Self.halfWidthPunctuation(in: input, latinWords: segmentation.latinWords)
         for word in segmentation.latinWords {
-            for (offset, character) in zip(word.keys, word.word) {
+            // A word after a dot written as a dot is a part of a name (index.html, Node.js, apple.com): as typed, not
+            // in the spelling the lexicon knows the word by (HTML)
+            let typed = String(input.keys[word.keys])
+            let afterDot = punctuation.contains { $0.index == word.keys.lowerBound - 1 && $0.mark == "." }
+            let spelling = afterDot && typed.lowercased() == word.word.lowercased() ? typed : word.word
+            for (offset, character) in zip(word.keys, spelling) {
                 elements[input.elementIndices[offset]] = .init(piece: .character(character), inputStyle: .direct)
             }
             // An n left on its own before the word is ん (アニメーショnGIF is アニメーションGIF), as a trailing n is at
@@ -2064,8 +2065,11 @@ public final class SegmentsManager {
                 elements[input.elementIndices[start - 1]] = .init(piece: .character("ん"), inputStyle: .direct)
             }
         }
-        for index in self.halfWidthHyphens(in: input, latinWords: segmentation.latinWords) {
+        for index in Self.halfWidthHyphens(in: input, latinWords: segmentation.latinWords) {
             elements[input.elementIndices[index]] = .init(piece: .character("-"), inputStyle: .direct)
+        }
+        for (index, mark) in punctuation {
+            elements[input.elementIndices[index]] = .init(piece: .character(mark), inputStyle: .direct)
         }
         // A capital read as romaji that a Latin word covers after all (the T of Tokyo, see `ScriptSegmentation.possibleWords`)
         // stays a letter
@@ -2103,14 +2107,34 @@ public final class SegmentsManager {
         )
     }
 
-    /// The hyphens typed right after a Latin word or a digit (Wi-Fi, UTF-8, 3-2-1), and after such a hyphen, when
-    /// symbols are typed in half width: they are written as -, not ー. In romaji - is the long vowel mark, which only
-    /// follows kana, so after letters written as letters or after digits it is a hyphen or a minus. Before digits after
-    /// kana it can be either (気温は-5度, コーヒー1杯), and it stays ー
-    private func halfWidthHyphens(in input: TypedInput, latinWords: [LatinInputGuess.Span]) -> [Int] {
-        guard self.context.typeHalfWidthSymbols ?? Config.TypeHalfWidthSymbols().value else {
-            return []
+    /// Whether the input has a hyphen or a punctuation mark written in half width even without Latin words (3-2-1, 1.1)
+    private func hasHalfWidthMarks(in input: TypedInput) -> Bool {
+        !Self.halfWidthHyphens(in: input, latinWords: []).isEmpty || !Self.halfWidthPunctuation(in: input, latinWords: []).isEmpty
+    }
+
+    /// The punctuation keys written in half width: a period or a comma between letters written as letters or digits on
+    /// both sides (Node.js, index.html, 1.1, v2.0.3, 1,000, iPhone,iPad). A period with kana or nothing after it ends
+    /// a sentence (会議はzoom。) and stays 。 until a letter or digit follows it; a comma with kana on a side stays 、
+    static func halfWidthPunctuation(in input: TypedInput, latinWords: [LatinInputGuess.Span]) -> [(index: Int, mark: Character)] {
+        let keys = input.keys
+        func isDigit(_ index: Int) -> Bool {
+            keys.indices.contains(index) && keys[index].isASCII && keys[index].isNumber
         }
+        func isWritten(_ index: Int) -> Bool {
+            isDigit(index) || latinWords.contains { $0.keys.contains(index) }
+        }
+        var marks: [(index: Int, mark: Character)] = []
+        for index in keys.indices.dropFirst() where (keys[index] == "." || keys[index] == ",") && isWritten(index - 1) && isWritten(index + 1) {
+            marks.append((index, keys[index]))
+        }
+        return marks
+    }
+
+    /// The hyphens typed right after a Latin word or a digit (Wi-Fi, UTF-8, us-west-1, 3-2-1), and after such a hyphen:
+    /// they are written as -, not ー, whether symbols are typed in half width or not, as periods between letters are. In
+    /// romaji - is the long vowel mark, which only follows kana, so after letters written as letters or after digits it is
+    /// a hyphen or a minus. Before digits after kana it can be either (気温は-5度, コーヒー1杯), and it stays ー
+    static func halfWidthHyphens(in input: TypedInput, latinWords: [LatinInputGuess.Span]) -> [Int] {
         var hyphens: [Int] = []
         for index in input.keys.indices.dropFirst() where input.keys[index] == "-" {
             let previous = index - 1

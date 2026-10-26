@@ -119,7 +119,8 @@ enum ScriptTaggerFeatures {
         /// With `evidence`, the analyses around every position where a Latin word could end or start are read too, by
         /// that analyzer (a fast one, see `JapaneseAnalyzer`); with `readingWords`, the dictionary's words for the kana
         /// of the words of the lexicon typed, by that analyzer; with `stranded`, the letters romaji leaves unread; with
-        /// `hyphens`, words joined by hyphens are one word (e-mail)
+        /// `hyphens`, words joined by hyphens are one word (e-mail); with `dots`, names with dots between letters are
+        /// one word (Node.js, index.html)
         init(
             _ input: TypedInput,
             models: CharacterModels?,
@@ -128,7 +129,8 @@ enum ScriptTaggerFeatures {
             evidence: JapaneseAnalyzer? = nil,
             readingWords: JapaneseAnalyzer? = nil,
             stranded: Bool = false,
-            hyphens: Bool = false
+            hyphens: Bool = false,
+            dots: Bool = false
         ) {
             let kana = input.prefixKana.last ?? ""
             self.boundary = (0 ... input.keys.count).map { kana.hasPrefix(input.prefixKana[$0]) }
@@ -136,8 +138,8 @@ enum ScriptTaggerFeatures {
             self.isComplete = input.isComplete
             self.modelScores = models?.scores(input.keys)
             self.morphology = analyzer.map { ScriptTaggerFeatures.morphology(of: input, analyzer: $0) }
-            self.lexicon = lexicon.map { ScriptTaggerFeatures.lexicon(of: input.keys, in: $0, throughHyphens: hyphens) }
-            self.words = ScriptTaggerFeatures.words(of: input.keys, models: models, lexicon: lexicon, throughHyphens: hyphens)
+            self.lexicon = lexicon.map { ScriptTaggerFeatures.lexicon(of: input.keys, in: $0, throughHyphens: hyphens, throughDots: dots) }
+            self.words = ScriptTaggerFeatures.words(of: input.keys, models: models, lexicon: lexicon, throughHyphens: hyphens, throughDots: dots)
             self.readings = readingWords.map { ScriptTaggerFeatures.readings(of: input, words: self.words, analyzer: $0) }
             self.stranded = stranded ? ScriptTaggerFeatures.stranded(of: input) : nil
             if let evidence {
@@ -406,11 +408,12 @@ enum ScriptTaggerFeatures {
     /// whether a word written with a capital inside starts at it (iPhone for iPhone or iphone), and whether it is inside
     /// one. Words of 2 to 12 letters, or `throughHyphens`, up to `maxWordLength` keys with hyphens between letters
     /// (e-mail is one word)
-    static func lexicon(of keys: [Character], in lexicon: ScriptLexicon, throughHyphens: Bool = false) -> [[UInt8]] {
+    static func lexicon(of keys: [Character], in lexicon: ScriptLexicon, throughHyphens: Bool = false, throughDots: Bool = false) -> [[UInt8]] {
         var result = keys.map { _ in [UInt8](repeating: 0, count: 4) }
         for start in keys.indices where keys[start].isASCII && keys[start].isLetter {
             var end = start + 1
-            while end <= min(keys.count, start + (throughHyphens ? Self.maxWordLength : 12)), Self.continuesWord(keys, at: end - 1, start: start, throughHyphens: throughHyphens) {
+            while end <= min(keys.count, start + (throughHyphens || throughDots ? Self.maxWordLength : 12)),
+                  Self.continuesWord(keys, at: end - 1, start: start, throughHyphens: throughHyphens, throughDots: throughDots) {
                 defer { end += 1 }
                 guard end - start >= 2 else {
                     continue
@@ -433,13 +436,17 @@ enum ScriptTaggerFeatures {
     }
 
     /// Whether the key at `index` can be part of a Latin word that starts at `start`: a letter, or, `throughHyphens`, a
-    /// hyphen between letters (the - of e-mail and built-in), so words joined by hyphens are one word
-    static func continuesWord(_ keys: [Character], at index: Int, start: Int, throughHyphens: Bool) -> Bool {
+    /// hyphen between letters (the - of e-mail and built-in), so words joined by hyphens are one word, or, `throughDots`,
+    /// a period between letters (the . of Node.js, index.html and apple.com), so a name with dots is one word
+    static func continuesWord(_ keys: [Character], at index: Int, start: Int, throughHyphens: Bool, throughDots: Bool = false) -> Bool {
         let key = keys[index]
         if key.isASCII && key.isLetter {
             return true
         }
-        return throughHyphens && key == "-" && index > start && index + 1 < keys.count
+        guard throughHyphens && key == "-" || throughDots && key == "." else {
+            return false
+        }
+        return index > start && index + 1 < keys.count
             && keys[index - 1].isASCII && keys[index - 1].isLetter && keys[index + 1].isASCII && keys[index + 1].isLetter
     }
 
@@ -449,7 +456,7 @@ enum ScriptTaggerFeatures {
     /// tell whether `lexicon` knows the word (1), written with a capital inside (2: github is GitHub); the lower 6 how
     /// much more Latin than romaji it reads for each character, by the character models, in quarters from -8 (32 is
     /// even). A word reads with its start and end: pig reads as a Latin word, butahapig does not
-    static func words(of keys: [Character], models: CharacterModels?, lexicon: ScriptLexicon?, throughHyphens: Bool = false) -> [[UInt8]] {
+    static func words(of keys: [Character], models: CharacterModels?, lexicon: ScriptLexicon?, throughHyphens: Bool = false, throughDots: Bool = false) -> [[UInt8]] {
         keys.indices.map { start in
             var result: [UInt8] = []
             let order = models?.latin.order ?? 1
@@ -458,7 +465,7 @@ enum ScriptTaggerFeatures {
             var romaji = 0.0
             for end in start + 1 ... min(keys.count, start + Self.maxWordLength) {
                 let key = keys[end - 1]
-                guard Self.continuesWord(keys, at: end - 1, start: start, throughHyphens: throughHyphens) else {
+                guard Self.continuesWord(keys, at: end - 1, start: start, throughHyphens: throughHyphens, throughDots: throughDots) else {
                     break
                 }
                 var value: UInt8 = 32
@@ -770,6 +777,19 @@ extension ScriptTaggerFeatures {
                     add(165, hyphens, known)
                     add(166, hyphens, bit(singleLetterPart), spelling)
                     add(167, hyphens, reading / 8)
+                }
+                if word.contains(".") {
+                    // Names with dots (Node.js, index.html, www.apple.com): how many dots, how long the part after the
+                    // last one is (an extension or a domain is short), whether the lexicon knows the part before it,
+                    // and how the name starts (a capital, as Node)
+                    let parts = word.split(separator: ".", omittingEmptySubsequences: false)
+                    let dots = UInt32(min(2, parts.count - 1))
+                    let last = UInt32(min(5, parts.last?.count ?? 0))
+                    let firstLength = parts.first?.count ?? 0
+                    let firstKnown = firstLength > 0 ? UInt32(lengths[firstLength - 1] >> 6) : 0
+                    add(168, dots, last)
+                    add(169, dots, firstKnown, last)
+                    add(170, dots, bit(word.first?.isUppercase ?? false), last)
                 }
                 if let stranded = shape.stranded {
                     // Letters romaji leaves unread inside the word (see `stranded(of:)`)
@@ -1283,6 +1303,8 @@ struct TaggerScriptIdentifier: ScriptIdentifier {
     let readsStranded: Bool
     /// Whether the model reads words joined by hyphens as one word (the hyphens file in its directory)
     let readsHyphens: Bool
+    /// Whether the model reads names with dots as one word (the dots file in its directory: Node.js, index.html)
+    let readsDots: Bool
     /// The model of the second pass (the stage2 directory), which also reads the analyses of the Japanese on each side
     /// of the Latin words the first pass finds likely (see `ScriptTaggerFeatures.evidence`), and its decoding costs
     let secondPass: (scorer: any ScriptScorer, decoding: ScriptTaggerDecoding)?
@@ -1299,6 +1321,7 @@ struct TaggerScriptIdentifier: ScriptIdentifier {
         self.readingWords = FileManager.default.fileExists(atPath: directory.appendingPathComponent("readings").path) ? self.analyzer : nil
         self.readsStranded = FileManager.default.fileExists(atPath: directory.appendingPathComponent("stranded").path)
         self.readsHyphens = FileManager.default.fileExists(atPath: directory.appendingPathComponent("hyphens").path)
+        self.readsDots = FileManager.default.fileExists(atPath: directory.appendingPathComponent("dots").path)
         self.evidenceAnalyzer = converter.map { JapaneseAnalyzer(converter: $0, fast: true) }
         self.readsEvidence = FileManager.default.fileExists(atPath: directory.appendingPathComponent("evidence").path)
         self.evidenceGate = (try? String(contentsOf: directory.appendingPathComponent("gate"), encoding: .utf8))
@@ -1361,7 +1384,7 @@ struct TaggerScriptIdentifier: ScriptIdentifier {
     /// What the model reads about `input`'s keys, without the second pass's evidence or the analyses around every
     /// position (see `rawLattice(for:shape:)`)
     func shape(_ input: TypedInput) -> ScriptTaggerFeatures.KeyShape {
-        .init(input, models: self.characterModels, analyzer: self.analyzer, lexicon: self.lexicon, readingWords: self.readingWords, stranded: self.readsStranded, hyphens: self.readsHyphens)
+        .init(input, models: self.characterModels, analyzer: self.analyzer, lexicon: self.lexicon, readingWords: self.readingWords, stranded: self.readsStranded, hyphens: self.readsHyphens, dots: self.readsDots)
     }
 
     /// How likely a key has to be in a Latin word, by the model without the analyses around every position, for the

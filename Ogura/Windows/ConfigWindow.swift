@@ -157,7 +157,7 @@ struct ConfigWindow: View {
                 Toggle("スペースは常に半角を入力", isOn: self.$typeHalfSpace)
                 VStack(alignment: .leading, spacing: 2) {
                     Toggle("記号は常に半角を入力（% + = など）", isOn: self.$typeHalfWidthSymbols)
-                    Text("句読点、長音のー、中黒の・、かぎかっこ「」『』は全角のままです。Option キーと一緒に打つ ［ ］ ｛ ｝ ／ も半角になります。")
+                    Text("句読点、長音のー、中黒の・、かぎかっこ「」『』は全角のままです（英字や数字の間のピリオドとカンマ、英単語や数字の後の - は半角）。Option キーと一緒に打つ ［ ］ ｛ ｝ ／ も半角になります。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

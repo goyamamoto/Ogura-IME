@@ -46,6 +46,8 @@ class OguraInputController: IMKInputController, NSMenuItemValidation {
         self.sharedWindows.predictionViewController
     }
     private var lastPredictionCandidates: [String] = []
+    /// Where the clause being converted starts in the marked text (UTF-16), for placing the candidates under it
+    private var focusedClauseLocation = 0
     private var lastPredictionUpdateTime: TimeInterval = 0
     private var predictionHideWorkItem: DispatchWorkItem?
 
@@ -112,7 +114,7 @@ class OguraInputController: IMKInputController, NSMenuItemValidation {
         (NSApplication.shared.delegate as? AppDelegate)?.scheduleLearningDataCommit()
         self.candidatesWindow.orderOut(nil)
         self.predictionWindow.orderOut(nil)
-        self.candidatesViewController.updateCandidatePresentations([], selectionIndex: nil, cursorLocation: .zero)
+        self.candidatesViewController.updateCandidatePresentations([], selectionIndex: nil, lineRect: .zero)
         super.deactivateServer(sender)
     }
 
@@ -182,20 +184,26 @@ class OguraInputController: IMKInputController, NSMenuItemValidation {
         self.refreshPredictionWindow()
     }
 
+    /// The client's line at a character of the marked text (an index into it, in UTF-16), in screen coordinates. A
+    /// client that knows no place for the character gets the marked text's start instead
     @MainActor
-    private func cursorLocation() -> CGPoint {
+    private func lineRect(atMarkedTextIndex index: Int = 0) -> CGRect {
         var rect: NSRect = .zero
-        self.client()?.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)
-        return rect.origin
+        self.client()?.attributes(forCharacterIndex: index, lineHeightRectangle: &rect)
+        if rect == .zero, index != 0 {
+            self.client()?.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)
+        }
+        return rect
     }
 
     @MainActor
     func refreshCandidateWindow() {
         switch self.session.candidateWindow {
         case .selecting(let candidates, let selectionIndex):
-            self.showCandidates(candidates, selectionIndex: selectionIndex, showIndex: true)
+            // Under the clause being converted, as the system's input methods and Mozc place them
+            self.showCandidates(candidates, selectionIndex: selectionIndex, showIndex: true, at: self.focusedClauseLocation)
         case .composing(let candidates, let selectionIndex):
-            self.showCandidates(candidates, selectionIndex: selectionIndex, showIndex: false)
+            self.showCandidates(candidates, selectionIndex: selectionIndex, showIndex: false, at: 0)
         case .hidden:
             self.candidatesWindow.setIsVisible(false)
             self.candidatesWindow.orderOut(nil)
@@ -204,12 +212,12 @@ class OguraInputController: IMKInputController, NSMenuItemValidation {
     }
 
     @MainActor
-    private func showCandidates(_ candidates: [Candidate], selectionIndex: Int?, showIndex: Bool) {
+    private func showCandidates(_ candidates: [Candidate], selectionIndex: Int?, showIndex: Bool, at markedTextIndex: Int) {
         self.candidatesViewController.showCandidateIndex = showIndex
         self.candidatesViewController.updateCandidatePresentations(
             self.segmentsManager.makeCandidatePresentations(candidates),
             selectionIndex: selectionIndex,
-            cursorLocation: self.cursorLocation()
+            lineRect: self.lineRect(atMarkedTextIndex: markedTextIndex)
         )
         self.candidatesWindow.orderFront(nil)
     }
@@ -246,7 +254,7 @@ class OguraInputController: IMKInputController, NSMenuItemValidation {
         self.predictionViewController.updateCandidatePresentations(
             candidates.map { .init(candidate: $0) },
             selectionIndex: nil,
-            cursorLocation: self.cursorLocation()
+            lineRect: self.lineRect()
         )
         if !self.liveConversionEnabled, self.candidatesWindow.isVisible {
             self.positionPredictionWindowRightOfCandidateWindow()
@@ -317,7 +325,11 @@ extension OguraInputController: InputSessionHost {
         ) as? [NSAttributedString.Key: Any]
         let ghost: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.secondaryLabelColor]
         let text = NSMutableAttributedString(string: "")
+        self.focusedClauseLocation = 0
         for part in markedText where !part.content.isEmpty {
+            if part.focus == .focused {
+                self.focusedClauseLocation = text.length
+            }
             let attributes: [NSAttributedString.Key: Any]? = switch part.focus {
             case .focused: highlight
             case .unfocused: underline

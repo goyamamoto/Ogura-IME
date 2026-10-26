@@ -2,71 +2,98 @@ import Cocoa
 import Core
 import KanaKanjiConverterModule
 
+/// The look of the candidate windows, after the system's input methods: a menu's material and corners, rows with no
+/// rules between them, the numbers in a column of their own, and the selected row as a rounded bar in the accent color
+enum CandidateWindowStyle {
+    static let font = NSFont.systemFont(ofSize: 16)
+    static let numberFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+    static let annotationFont = NSFont.systemFont(ofSize: 12)
+    static let rowHeight: CGFloat = 26
+    /// Above the first row and below the last, as in a menu
+    static let verticalPadding: CGFloat = 5
+    /// From the window's sides to the selection bar
+    static let selectionInset: CGFloat = 5
+    static let selectionRadius: CGFloat = 5
+    /// From the window's left edge to the first thing in a row (the number, or the text when there is none)
+    static let leadingInset: CGFloat = 12
+    /// The numbers' column, up to where the text starts
+    static let numberColumnWidth: CGFloat = 20
+    static let annotationGap: CGFloat = 16
+    static let trailingInset: CGFloat = 12
+    static let minimumWidth: CGFloat = 96
+    static let cornerRadius: CGFloat = 10
+}
+
 class NonClickableTableView: NSTableView {
     override func rightMouseDown(with event: NSEvent) {}
     override func mouseDown(with event: NSEvent) {}
     override func otherMouseDown(with event: NSEvent) {}
 }
 
+/// Draws the selected row as the system's menus and input methods do. The candidate window never becomes the key
+/// window, so the row always takes itself as emphasized: otherwise the selection would be gray
+class CandidateTableRowView: NSTableRowView {
+    override var isEmphasized: Bool {
+        get { true }
+        set {}
+    }
+
+    override func drawSelection(in dirtyRect: NSRect) {
+        let rect = self.bounds.insetBy(dx: CandidateWindowStyle.selectionInset, dy: 1)
+        NSColor.selectedContentBackgroundColor.setFill()
+        NSBezierPath(
+            roundedRect: rect,
+            xRadius: CandidateWindowStyle.selectionRadius,
+            yRadius: CandidateWindowStyle.selectionRadius
+        ).fill()
+    }
+}
+
 class CandidateTableCellView: NSTableCellView {
+    let numberTextField: NSTextField
     let candidateTextField: NSTextField
     let candidateAnnotationTextField: NSTextField
     private lazy var candidateTextFieldLeadingConstraint: NSLayoutConstraint = {
-        self.candidateTextField.leadingAnchor.constraint(equalTo: self.leadingAnchor)
+        self.candidateTextField.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: CandidateWindowStyle.leadingInset)
     }()
     private lazy var candidateTextFieldTrailingToAnnotationConstraint: NSLayoutConstraint = {
-        self.candidateTextField.trailingAnchor.constraint(lessThanOrEqualTo: self.candidateAnnotationTextField.leadingAnchor, constant: -8)
+        self.candidateTextField.trailingAnchor.constraint(
+            lessThanOrEqualTo: self.candidateAnnotationTextField.leadingAnchor,
+            constant: -CandidateWindowStyle.annotationGap
+        )
     }()
     private lazy var candidateTextFieldTrailingToContainerConstraint: NSLayoutConstraint = {
-        let constraint = self.candidateTextField.trailingAnchor.constraint(equalTo: self.trailingAnchor)
-        return constraint
-    }()
-    private lazy var candidateAnnotationTextFieldLeadingConstraint: NSLayoutConstraint = {
-        self.candidateAnnotationTextField.leadingAnchor.constraint(greaterThanOrEqualTo: self.candidateTextField.trailingAnchor, constant: 8)
+        self.candidateTextField.trailingAnchor.constraint(lessThanOrEqualTo: self.trailingAnchor, constant: -CandidateWindowStyle.trailingInset)
     }()
     private lazy var candidateAnnotationTextFieldTrailingConstraint: NSLayoutConstraint = {
-        self.candidateAnnotationTextField.trailingAnchor.constraint(equalTo: self.trailingAnchor)
+        self.candidateAnnotationTextField.trailingAnchor.constraint(equalTo: self.trailingAnchor, constant: -CandidateWindowStyle.trailingInset)
     }()
 
     override init(frame frameRect: NSRect) {
-        self.candidateTextField = NSTextField(labelWithString: "")
-        self.candidateTextField.font = NSFont.systemFont(ofSize: 18)
-        self.candidateAnnotationTextField = NSTextField(labelWithString: "")
-        self.candidateAnnotationTextField.font = NSFont.systemFont(ofSize: 12)
-        self.candidateAnnotationTextField.textColor = .systemGray
+        self.numberTextField = Self.makeLabel(font: CandidateWindowStyle.numberFont)
+        self.candidateTextField = Self.makeLabel(font: CandidateWindowStyle.font)
+        self.candidateTextField.lineBreakMode = .byTruncatingTail
+        self.candidateAnnotationTextField = Self.makeLabel(font: CandidateWindowStyle.annotationFont)
         self.candidateAnnotationTextField.alignment = .right
         super.init(frame: frameRect)
-        self.addSubview(self.candidateTextField)
-        self.addSubview(self.candidateAnnotationTextField)
+        for field in [self.numberTextField, self.candidateTextField, self.candidateAnnotationTextField] {
+            field.translatesAutoresizingMaskIntoConstraints = false
+            self.addSubview(field)
+        }
 
-        self.candidateTextField.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
+            self.numberTextField.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: CandidateWindowStyle.leadingInset),
+            self.numberTextField.firstBaselineAnchor.constraint(equalTo: self.candidateTextField.firstBaselineAnchor),
             self.candidateTextFieldLeadingConstraint,
-            self.candidateTextFieldTrailingToContainerConstraint,
-            self.candidateTextField.centerYAnchor.constraint(equalTo: self.centerYAnchor)
+            self.candidateTextField.centerYAnchor.constraint(equalTo: self.centerYAnchor),
+            self.candidateAnnotationTextField.firstBaselineAnchor.constraint(equalTo: self.candidateTextField.firstBaselineAnchor)
         ])
         self.candidateTextField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         self.candidateTextField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        self.candidateAnnotationTextField.translatesAutoresizingMaskIntoConstraints = false
         self.candidateAnnotationTextField.setContentHuggingPriority(.required, for: .horizontal)
         self.candidateAnnotationTextField.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        NSLayoutConstraint.activate([
-            self.candidateAnnotationTextField.centerYAnchor.constraint(equalTo: self.centerYAnchor)
-        ])
-
-        // Basic setup
-        self.candidateTextField.isEditable = false
-        self.candidateTextField.isBordered = false
-        self.candidateTextField.drawsBackground = false
-        self.candidateTextField.backgroundColor = .clear
-
-        self.candidateAnnotationTextField.isEditable = false
-        self.candidateAnnotationTextField.isBordered = false
-        self.candidateAnnotationTextField.drawsBackground = false
-        self.candidateAnnotationTextField.backgroundColor = .clear
-
+        self.showNumberColumn(false)
         self.showCandidateAnnotationTextField(false)
     }
 
@@ -74,17 +101,33 @@ class CandidateTableCellView: NSTableCellView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override var backgroundStyle: NSView.BackgroundStyle {
-        didSet {
-            candidateTextField.textColor = backgroundStyle == .emphasized ? .white : NSAppearance.currentDrawing().name == .aqua ? .init(white: 0.3, alpha: 1.0) : .textColor
-            candidateAnnotationTextField.textColor = .systemGray
-        }
+    private static func makeLabel(font: NSFont) -> NSTextField {
+        let field = NSTextField(labelWithString: "")
+        field.font = font
+        field.isEditable = false
+        field.isBordered = false
+        field.drawsBackground = false
+        field.backgroundColor = .clear
+        return field
+    }
+
+    /// The text color of a row, selected or not, for the text, the numbers and the annotations
+    func applyColors(selected: Bool) {
+        self.candidateTextField.textColor = selected ? .alternateSelectedControlTextColor : .labelColor
+        self.numberTextField.textColor = selected ? .alternateSelectedControlTextColor : .secondaryLabelColor
+        self.candidateAnnotationTextField.textColor = selected ? .alternateSelectedControlTextColor : .secondaryLabelColor
+    }
+
+    /// Whether the rows have the numbers' column before the text (the text moves right to make room for it)
+    func showNumberColumn(_ show: Bool) {
+        self.numberTextField.isHidden = !show
+        self.candidateTextFieldLeadingConstraint.constant = CandidateWindowStyle.leadingInset
+            + (show ? CandidateWindowStyle.numberColumnWidth : 0)
     }
 
     func showCandidateAnnotationTextField(_ show: Bool) {
         self.candidateTextFieldTrailingToContainerConstraint.isActive = !show
         self.candidateTextFieldTrailingToAnnotationConstraint.isActive = show
-        self.candidateAnnotationTextFieldLeadingConstraint.isActive = show
         self.candidateAnnotationTextFieldTrailingConstraint.isActive = show
         self.candidateAnnotationTextField.isHidden = !show
     }
@@ -100,10 +143,10 @@ class BaseCandidateViewController: NSViewController {
         let containerView = NSView()
         containerView.translatesAutoresizingMaskIntoConstraints = false
 
-        // Material view (background)
+        // Material view (background), the one menus use
         let materialView = NSVisualEffectView()
         materialView.blendingMode = .behindWindow
-        materialView.material = .windowBackground
+        materialView.material = .menu
         materialView.state = .active
         materialView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -131,12 +174,13 @@ class BaseCandidateViewController: NSViewController {
 
             scrollView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: containerView.topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor)
+            scrollView.topAnchor.constraint(equalTo: containerView.topAnchor, constant: CandidateWindowStyle.verticalPadding),
+            scrollView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -CandidateWindowStyle.verticalPadding)
         ])
 
         self.tableView.backgroundColor = .clear
-        self.tableView.gridStyleMask = .solidHorizontalGridLineMask
+        self.tableView.gridStyleMask = []
+        self.tableView.intercellSpacing = .zero
 
         // Table view setup
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("CandidatesColumn"))
@@ -145,7 +189,7 @@ class BaseCandidateViewController: NSViewController {
         self.tableView.delegate = self
         self.tableView.dataSource = self
         self.tableView.selectionHighlightStyle = .regular
-        self.tableView.rowHeight = 32
+        self.tableView.rowHeight = CandidateWindowStyle.rowHeight
 
         self.view = containerView
     }
@@ -174,16 +218,17 @@ class BaseCandidateViewController: NSViewController {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
 
-        window.contentView?.layer?.cornerRadius = 16
+        window.contentView?.layer?.cornerRadius = CandidateWindowStyle.cornerRadius
         window.backgroundColor = .clear
         window.isOpaque = false
     }
 
-    func updateCandidatePresentations(_ candidates: [CandidatePresentation], selectionIndex: Int?, cursorLocation: CGPoint) {
+    /// Shows the candidates for the text on `lineRect` (the client's line at the text, in screen coordinates)
+    func updateCandidatePresentations(_ candidates: [CandidatePresentation], selectionIndex: Int?, lineRect: CGRect) {
         self.candidates = candidates
         self.currentSelectedRow = selectionIndex ?? -1
         self.tableView.reloadData()
-        self.resizeWindowToFitContent(cursorLocation: cursorLocation)
+        self.resizeWindowToFitContent(lineRect: lineRect)
         // A selection change caused by redrawing is not a user action, so do not report it.
         self.updateSelection(to: selectionIndex ?? -1, notifySelectionChange: false)
     }
@@ -210,13 +255,13 @@ class BaseCandidateViewController: NSViewController {
         }
     }
 
-    func getMaxTextWidth(candidates: some Sequence<String>, font: NSFont = .systemFont(ofSize: 18)) -> CGFloat {
+    func getMaxTextWidth(candidates: some Sequence<String>, font: NSFont = CandidateWindowStyle.font) -> CGFloat {
         candidates.reduce(0) { maxWidth, candidate in
             let attributedString = NSAttributedString(
                 string: candidate,
                 attributes: [.font: font]
             )
-            return max(maxWidth, attributedString.size().width)
+            return max(maxWidth, ceil(attributedString.size().width))
         }
     }
 
@@ -224,19 +269,25 @@ class BaseCandidateViewController: NSViewController {
         self.candidates.count
     }
 
-    func getWindowWidth(maxContentWidth: CGFloat) -> CGFloat {
-        maxContentWidth
+    /// From the window's left edge to where the candidates' text starts, which goes under the start of the text they
+    /// are for
+    var textOffset: CGFloat {
+        CandidateWindowStyle.leadingInset
     }
 
-    func resizeWindowToFitContent(cursorLocation: CGPoint) {
+    func getWindowWidth(maxContentWidth: CGFloat) -> CGFloat {
+        max(CandidateWindowStyle.minimumWidth, self.textOffset + maxContentWidth + CandidateWindowStyle.trailingInset)
+    }
+
+    func resizeWindowToFitContent(lineRect: CGRect) {
         guard let window = self.view.window else {
             return
         }
         // window.screen returns the screen the window is on now. With multiple displays,
         // right after the cursor moves to another display, this can differ from the
         // display that holds the cursor. So always prefer the screen that contains the
-        // cursor position.
-        guard let screen = ScreenLookup.screen(containing: cursorLocation, fallbackWindow: window) else {
+        // text's line.
+        guard let screen = ScreenLookup.screen(containing: lineRect.origin, fallbackWindow: window) else {
             return
         }
 
@@ -244,19 +295,18 @@ class BaseCandidateViewController: NSViewController {
             return
         }
 
-        let rowHeight = self.tableView.rowHeight
-        let tableViewHeight = CGFloat(self.numberOfVisibleRows) * rowHeight
-
+        let height = CGFloat(self.numberOfVisibleRows) * self.tableView.rowHeight + 2 * CandidateWindowStyle.verticalPadding
         let maxWidth = self.getMaxTextWidth(candidates: self.candidates.lazy.map { $0.candidate.text })
-        let windowWidth = self.getWindowWidth(maxContentWidth: maxWidth)
-        let newWindowFrame = WindowPositioning.frameNearCursor(
-            currentFrame: .init(window.frame),
-            screenRect: .init(screen.visibleFrame),
-            cursorLocation: .init(cursorLocation),
-            desiredSize: .init(width: windowWidth, height: tableViewHeight)
+        let newWindowFrame = WindowPositioning.candidateWindowFrame(
+            lineRect: .init(lineRect),
+            textOffset: Double(self.textOffset),
+            size: .init(width: Double(self.getWindowWidth(maxContentWidth: maxWidth)), height: Double(height)),
+            screenRect: .init(screen.visibleFrame)
         ).cgRect
         if newWindowFrame != window.frame {
             window.setFrame(newWindowFrame, display: true, animate: false)
+            // The shadow follows the rounded corners only when it is made again for the new size
+            window.invalidateShadow()
         }
     }
 
@@ -285,8 +335,10 @@ class BaseCandidateViewController: NSViewController {
 
     internal func configureCellView(_ cell: CandidateTableCellView, forRow row: Int) {
         cell.candidateTextField.stringValue = candidates[row].candidate.text
+        cell.showNumberColumn(false)
         cell.showCandidateAnnotationTextField(false)
         cell.candidateAnnotationTextField.stringValue = ""
+        cell.applyColors(selected: row == self.currentSelectedRow)
     }
 }
 
@@ -313,10 +365,10 @@ extension BaseCandidateViewController: NSTableViewDelegate, NSTableViewDataSourc
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let identifier = NSUserInterfaceItemIdentifier("CandidateRowView")
-        var rowView = tableView.makeView(withIdentifier: identifier, owner: nil) as? NSTableRowView
+        var rowView = tableView.makeView(withIdentifier: identifier, owner: nil) as? CandidateTableRowView
 
         if rowView == nil {
-            rowView = NSTableRowView()
+            rowView = CandidateTableRowView()
             rowView?.identifier = identifier
         }
 

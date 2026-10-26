@@ -45,8 +45,7 @@ private func committed(_ keys: String) -> String {
             resourcesDirectoryURL: resourcesDirectory,
             liveConversionEnabled: true,
             learnedScriptIdentification: true,
-            scriptModelDirectoryURL: repository.appendingPathComponent("Ogura/Resources/ScriptModel", isDirectory: true),
-            typeHalfWidthSymbols: false
+            scriptModelDirectoryURL: repository.appendingPathComponent("Ogura/Resources/ScriptModel", isDirectory: true)
         )
     )
     let session = InputSession(segmentsManager: manager, settingsProvider: {
