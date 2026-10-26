@@ -156,6 +156,7 @@ public final class InputSession {
 
     /// Handle a key event. Returns true if the IME consumed it, false if it should go to the app.
     public func handle(_ event: KeyEventCore) -> Bool {
+        self.logRepeatsLetGo(event)
         defer {
             self.scheduleThoroughConversion()
         }
@@ -199,16 +200,8 @@ public final class InputSession {
             keyBindingStyle: settings.keyBindingStyle
         )
         if Self.typesIntoInput(clientAction), self.segmentsManager.convertsTypingInBackground {
-            if self.fallsFarBehind() {
-                // The conversion too far behind (a key held down, a long input on a slow Mac): never a key dropped. The
-                // conversion is made here, the key waiting for it (the keys after it wait in the system's queue
-                // meanwhile), and a long input's start goes in then, so that the input stays bounded. Logged with numbers
-                // only, to count how often it happens
-                let (behind, started) = (self.segmentsManager.unconvertedCharacterCount, ProcessInfo.processInfo.systemUptime)
-                self.withSettledConversion {
-                    self.commitLongInputHead()
-                }
-                typingLog.notice("a key waited for the conversion: \(behind, privacy: .public) characters unconverted, \(String(format: "%.3f", ProcessInfo.processInfo.systemUptime - started), privacy: .public) s")
+            guard self.keepsUpWithTheConversion(event) else {
+                return true
             }
             // Shown at once; the conversion of the input comes from the background (see `segmentsManagerDidUpdateDisplay`)
             return self.handleClientAction(clientAction, callback: callback, settings: settings)
@@ -244,6 +237,51 @@ public final class InputSession {
     /// types waits for the conversion, made then on the main thread, and a long input's start goes in (see `handle`).
     /// No key is ever dropped (before, the keys were taken and dropped here, silently)
     static let typingPausesAt = 16
+
+    /// The repeats of a key held down let go while the conversion was far behind (see `handle`), logged as a count
+    /// when a key that is no repeat comes
+    private var repeatsLetGo = 0
+
+    /// For a test: told when a key waits for the conversion (see `typingPausesAt`)
+    nonisolated(unsafe) static var typingWaitObserver: (@Sendable () -> Void)?
+
+    /// Before a key that types while the conversion is made in the background: whether it goes on. Far behind, a repeat
+    /// of a key held down is let go and a key pressed waits for the conversion (see `typingPausesAt`)
+    private func keepsUpWithTheConversion(_ event: KeyEventCore) -> Bool {
+        guard self.fallsFarBehind() else {
+            return true
+        }
+        if event.isRepeat {
+            // A key held down: the repeats the system makes of it are let go while the conversion is far behind. The
+            // person holding it watches the screen and lets go once enough shows; were the repeats to wait for the
+            // conversion as a key pressed does, the screen would fall behind for as long as it is held (on a slower Mac the
+            // conversion of 16 repeats takes longer than they take to come), and the repeats queued meanwhile would keep coming for
+            // seconds after the key was let go. So the repeats go only as far as the screen can show them, and stop as
+            // soon as it is let go. Only repeats: a key pressed is never dropped
+            self.repeatsLetGo += 1
+            return false
+        }
+        // The conversion too far behind (a long input on a slow Mac, keys typed very fast): never a key pressed dropped.
+        // The conversion is made here, the key waiting for it (the keys after it wait in the system's queue meanwhile),
+        // and a long input's start goes in then, so that the input stays bounded. Written to this Mac's system log as numbers
+        // only; nothing is sent anywhere
+        let (behind, started) = (self.segmentsManager.unconvertedCharacterCount, self.uptime())
+        self.withSettledConversion {
+            self.commitLongInputHead()
+        }
+        typingLog.notice("a key waited for the conversion: \(behind, privacy: .public) characters unconverted, \(String(format: "%.3f", self.uptime() - started), privacy: .public) s")
+        Self.typingWaitObserver?()
+        return true
+    }
+
+    /// The repeats let go so far, logged as a count once a key that is no repeat comes (see `keepsUpWithTheConversion`)
+    private func logRepeatsLetGo(_ event: KeyEventCore) {
+        guard !event.isRepeat, self.repeatsLetGo > 0 else {
+            return
+        }
+        typingLog.notice("repeats of a key held down let go while the conversion was far behind: \(self.repeatsLetGo, privacy: .public)")
+        self.repeatsLetGo = 0
+    }
 
     /// Whether the conversion is too far behind for the key that types to go on without it (see `typingPausesAt`)
     private func fallsFarBehind() -> Bool {

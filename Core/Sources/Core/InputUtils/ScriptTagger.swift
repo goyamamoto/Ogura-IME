@@ -135,7 +135,7 @@ enum ScriptTaggerFeatures {
             let kana = input.prefixKana.last ?? ""
             self.boundary = (0 ... input.keys.count).map { kana.hasPrefix(input.prefixKana[$0]) }
             self.pending = (0 ..< input.keys.count).map { input.prefixKana[$0 + 1].last.map { $0.isASCII && $0.isLetter } ?? false }
-            self.isComplete = input.isComplete
+            self.isComplete = input.readsAsComplete
             self.modelScores = models?.scores(input.keys)
             self.morphology = analyzer.map { ScriptTaggerFeatures.morphology(of: input, analyzer: $0) }
             self.lexicon = lexicon.map { ScriptTaggerFeatures.lexicon(of: input.keys, in: $0, throughHyphens: hyphens, throughDots: dots) }
@@ -156,7 +156,7 @@ enum ScriptTaggerFeatures {
     static let noMorphology = [UInt32](repeating: .max, count: 7)
 
     static func morphology(of input: TypedInput, analyzer: JapaneseAnalyzer) -> [[UInt32]] {
-        guard let words = analyzer.analyze(Self.romajiText(of: input.elements[...], isComplete: input.isComplete)), !words.isEmpty else {
+        guard let words = analyzer.analyze(Self.romajiText(of: input.elements[...], isComplete: input.readsAsComplete)), !words.isEmpty else {
             return input.keys.map { _ in Self.noMorphology }
         }
         return Self.keyMorphology(of: input, words: words)
@@ -334,10 +334,10 @@ enum ScriptTaggerFeatures {
         }
         for end in 1 ..< max(count, 1) {
             let limit = min(count, end + Self.evidenceWindow)
-            guard Self.growingWindows || input.isComplete || limit < count else {
+            guard Self.growingWindows || input.readsAsComplete || limit < count else {
                 continue
             }
-            let analysis = window(end ..< limit, isComplete: input.isComplete && limit == count)
+            let analysis = window(end ..< limit, isComplete: input.readsAsComplete && limit == count)
             after[end] = vector(analysis?.words, last: false)
             if let analysis {
                 consider(analysis.rows, over: end ..< limit) { UInt32($0 - end) }
@@ -391,7 +391,7 @@ enum ScriptTaggerFeatures {
         // windows overlap
         for (end, _) in ends.sorted(by: { $0.value < $1.value }) where end > 0 && end < count {
             let limit = min(count, end + Self.evidenceWindow)
-            let (words, piece) = analysis(end ..< limit, isComplete: input.isComplete && limit == count)
+            let (words, piece) = analysis(end ..< limit, isComplete: input.readsAsComplete && limit == count)
             result.after[end] = vector(words, last: false)
             guard result.morphology != nil, let words, let piece else {
                 continue
@@ -514,7 +514,7 @@ enum ScriptTaggerFeatures {
         let whole = input.prefixKana.last ?? ""
         return input.keys.indices.map { index in
             let upTo = input.prefixKana[index + 1]
-            guard index < input.keys.count - 1 || input.isComplete, input.keys[index].isASCII, input.keys[index].isLetter,
+            guard index < input.keys.count - 1 || input.readsAsComplete, input.keys[index].isASCII, input.keys[index].isLetter,
                   let last = upTo.last, last.isASCII, last.isLetter, whole.hasPrefix(upTo) else {
                 return false
             }
@@ -1098,6 +1098,16 @@ struct ScriptTaggerLattice {
         )
     }
 
+    /// The lattice with no way to read the keys of which `capitals` are capitals as romaji: a capital marks Latin, so it
+    /// starts a Latin word or is inside one, wherever it is typed
+    func keepingCapitalsLatin(_ capitals: [Bool]) -> ScriptTaggerLattice {
+        var emissions = self.emissions
+        for (index, isCapital) in capitals.enumerated() where isCapital && !self.words[index].isEmpty {
+            emissions[index][Self.romaji] = -.infinity
+        }
+        return ScriptTaggerLattice(emissions: emissions, words: self.words, transitions: self.transitions, starts: self.starts)
+    }
+
     private func transition(_ from: Int, _ to: Int) -> Double {
         self.transitions[from * ScriptTaggerModel.tagCount + to]
     }
@@ -1399,7 +1409,7 @@ struct TaggerScriptIdentifier: ScriptIdentifier {
         guard let analyzer = self.evidenceAnalyzer else {
             return shape
         }
-        let first = self.scorer.lattice(keys: input.keys, shape: shape).applying(self.decoding, capitals: input.keys.map(\.isUppercase), isComplete: input.isComplete, typingFrom: input.typingFrom)
+        let first = self.scorer.lattice(keys: input.keys, shape: shape).applying(self.decoding, capitals: input.keys.map(\.isUppercase), isComplete: input.readsAsComplete, typingFrom: input.typingFrom)
         let (starts, ends) = Self.boundaries(of: first)
         let evidence = ScriptTaggerFeatures.evidence(of: input, analyzer: analyzer, starts: starts, ends: ends, morphology: shape.morphology)
         var conditioned = shape
@@ -1466,8 +1476,44 @@ struct TaggerScriptIdentifier: ScriptIdentifier {
     }
 
     func segment(_ input: TypedInput) -> ScriptSegmentation {
-        let lattice = self.rawLattice(for: input).applying(self.finalDecoding, capitals: input.keys.map(\.isUppercase), isComplete: input.isComplete, typingFrom: input.typingFrom)
-        let tags = lattice.best()
+        let decoded = self.rawLattice(for: input)
+            .applying(self.finalDecoding, capitals: input.keys.map(\.isUppercase), isComplete: input.readsAsComplete, typingFrom: input.typingFrom)
+        let capitals = input.keys.map { $0.isASCII && $0.isUppercase }
+        let modelTags = decoded.best()
+        let romajiCapitals = modelTags.indices.filter { modelTags[$0] == .japanese && capitals[$0] }
+        // A capital marks Latin wherever it is typed: the model's reading of one as romaji is kept aside for the checks
+        let lattice = romajiCapitals.isEmpty ? decoded : decoded.keepingCapitalsLatin(capitals)
+        let tags = romajiCapitals.isEmpty ? modelTags : lattice.best()
+        var words = self.latinWords(of: tags, in: input)
+        var capitalsAsRomaji: [LatinInputGuess.Span]?
+        if !romajiCapitals.isEmpty {
+            let modelWords = self.latinWords(of: modelTags, in: input)
+            let wordsOfCapitals = words.filter { word in romajiCapitals.contains { word.keys.contains($0) } }
+            if !wordsOfCapitals.contains(where: { word in modelWords.contains { $0.keys.overlaps(word.keys) } }) {
+                capitalsAsRomaji = modelWords
+            }
+        }
+        let posteriors = lattice.posteriors(lattice.sums())
+        var uncertain = self.uncertainWords(in: input, tags: tags, posteriors: posteriors)
+        words.removeAll { word in uncertain.contains { $0.keys == word.keys } }
+        var shorter = self.shorterWords(of: words, in: input, posteriors: posteriors.words)
+        var longer = self.longerWords(of: words, in: input, tags: tags, posteriors: posteriors.words)
+        var possible = self.possibleWords(in: input, tags: tags, posteriors: posteriors.words, uncertain: uncertain)
+        if let clauseEnd = input.clauseEnd {
+            // The end of the clause being converted cuts a Latin word it falls in, as the rules do: the letters on each
+            // side stay letters (win|dows), rather than the model reading what is left of the word again
+            words = words.flatMap { $0.split(at: clauseEnd) }
+            capitalsAsRomaji = capitalsAsRomaji?.flatMap { $0.split(at: clauseEnd) }
+            uncertain.removeAll { $0.keys.lowerBound < clauseEnd && clauseEnd < $0.keys.upperBound }
+            shorter.removeAll { $0.word.lowerBound < clauseEnd && clauseEnd < $0.word.upperBound }
+            longer.removeAll { $0.word.lowerBound < clauseEnd && clauseEnd < $0.longer.keys.upperBound }
+            possible.removeAll { $0.word.keys.lowerBound < clauseEnd && clauseEnd < $0.word.keys.upperBound }
+        }
+        return ScriptSegmentation(latinWords: words, romajiCapitals: romajiCapitals, capitalsAsRomaji: capitalsAsRomaji, uncertainWords: uncertain, shorterWords: shorter, longerWords: longer, possibleWords: possible)
+    }
+
+    /// The Latin words `tags` read in `input`, with the spelling to write
+    private func latinWords(of tags: [ScriptTag], in input: TypedInput) -> [LatinInputGuess.Span] {
         var words: [LatinInputGuess.Span] = []
         var start: Int?
         for index in 0 ... tags.count {
@@ -1480,23 +1526,7 @@ struct TaggerScriptIdentifier: ScriptIdentifier {
                 start = index
             }
         }
-        let romajiCapitals = tags.indices.filter { tags[$0] == .japanese && input.keys[$0].isASCII && input.keys[$0].isUppercase }
-        let posteriors = lattice.posteriors(lattice.sums())
-        var uncertain = self.uncertainWords(in: input, tags: tags, posteriors: posteriors)
-        words.removeAll { word in uncertain.contains { $0.keys == word.keys } }
-        var shorter = self.shorterWords(of: words, in: input, posteriors: posteriors.words)
-        var longer = self.longerWords(of: words, in: input, tags: tags, posteriors: posteriors.words)
-        var possible = self.possibleWords(in: input, tags: tags, posteriors: posteriors.words, uncertain: uncertain)
-        if let clauseEnd = input.clauseEnd {
-            // The end of the clause being converted cuts a Latin word it falls in, as the rules do: the letters on each
-            // side stay letters (win|dows), rather than the model reading what is left of the word again
-            words = words.flatMap { $0.split(at: clauseEnd) }
-            uncertain.removeAll { $0.keys.lowerBound < clauseEnd && clauseEnd < $0.keys.upperBound }
-            shorter.removeAll { $0.word.lowerBound < clauseEnd && clauseEnd < $0.word.upperBound }
-            longer.removeAll { $0.word.lowerBound < clauseEnd && clauseEnd < $0.longer.keys.upperBound }
-            possible.removeAll { $0.word.keys.lowerBound < clauseEnd && clauseEnd < $0.word.keys.upperBound }
-        }
-        return ScriptSegmentation(latinWords: words, romajiCapitals: romajiCapitals, uncertainWords: uncertain, shorterWords: shorter, longerWords: longer, possibleWords: possible)
+        return words
     }
 
     /// How the letters `typed` are written: only a known spelling with a capital inside changes them (iphone is iPhone)
@@ -1516,22 +1546,37 @@ struct TaggerScriptIdentifier: ScriptIdentifier {
     /// sign-in; not T-sha in T-shatsu: Zenzai cannot tell letters from kana after a word it does not know), or at one
     /// started with a capital, which the converter keeps when it is a name its dictionary knows (Osaka in Osakashi), from
     /// the same start, likely enough by `posteriors` (`ScriptTaggerLattice.posteriors`), with the keys left over to the
-    /// word's end reading as romaji on their own, as the converter reads them after the shorter word (Mac|hakaku). Or
-    /// where a word may start one key later, its first n being the ん of the kana before it (ん+map in sakuhinmap)
+    /// word's end reading as romaji on their own, as the converter reads them after the shorter word (Mac|hakaku), or
+    /// with the keys that follow the word, when the word took the first letter of a kana (SoftBank|sha in
+    /// SoftBanks|hanoseihin, see `leftOverReadsOn`). Or where a word may start one key later, its first n being the ん
+    /// of the kana before it (ん+map in sakuhinmap)
     private func shorterWords(of words: [LatinInputGuess.Span], in input: TypedInput, posteriors: [[Double]]) -> [ScriptSegmentation.ShorterWord] {
         var shorter: [ScriptSegmentation.ShorterWord] = []
         for word in words where word.keys.count >= 3 {
             let start = word.keys.lowerBound
             var candidates: [ScriptSegmentation.ShorterWord] = []
+            var beforeKana: [ScriptSegmentation.ShorterWord] = []
             for end in start + 2 ..< word.keys.upperBound where end - start - 1 < posteriors[start].count {
                 let probability = posteriors[start][end - start - 1]
                 let typed = String(input.keys[start ..< end])
                 let known = self.knows(typed)
-                guard probability >= Self.shorterWordThreshold, known || input.keys[start].isUppercase,
-                      input.readsAsKana(end ..< word.keys.upperBound) else {
+                // A name read on into a kana of two consonants and a vowel, whole (Teslasha) or its first letter or two
+                // (Teslas|ha): the model may give its true end next to nothing. Not at an n, which before a consonant is
+                // ん and the start of no such kana (Fi|nde in Finder), nor at a capital, which stays a letter (AW|S in AWSha)
+                let endsBeforeKana = input.keys[start].isUppercase && word.keys.upperBound - end <= 3
+                    && end + 3 <= max(word.keys.upperBound, input.typingFrom) && input.keys[end].isLowercase
+                    && !"aiueon".contains(input.keys[end]) && !"aiueo".contains(input.keys[end + 1]) && "aiueo".contains(input.keys[end + 2])
+                    && input.readsAsKana(end ..< end + 3)
+                let tookKanaHead = endsBeforeKana && word.keys.upperBound - end < 3
+                if probability < Self.shorterWordThreshold, endsBeforeKana {
+                    beforeKana.append(.init(word: word.keys, shorter: .init(word: self.writing(of: typed), keys: start ..< end), probability: probability, known: known, beforeKana: true, tookKanaHead: tookKanaHead))
                     continue
                 }
-                candidates.append(.init(word: word.keys, shorter: .init(word: self.writing(of: typed), keys: start ..< end), probability: probability, known: known))
+                guard probability >= Self.shorterWordThreshold, known || input.keys[start].isUppercase,
+                      input.readsAsKana(end ..< word.keys.upperBound) || Self.leftOverReadsOn(from: end, of: word.keys, in: input) else {
+                    continue
+                }
+                candidates.append(.init(word: word.keys, shorter: .init(word: self.writing(of: typed), keys: start ..< end), probability: probability, known: known, tookKanaHead: tookKanaHead))
             }
             // The word without its first n, when that n closes the kana before it as ん (ん+map for sakuhinmap, read as
             // さくひ+nmap): a word the lexicon knows, likely enough from there
@@ -1543,17 +1588,31 @@ struct TaggerScriptIdentifier: ScriptIdentifier {
                     candidates.append(.init(word: word.keys, shorter: .init(word: self.writing(of: typed), keys: start + 1 ..< end), probability: probability))
                 }
             }
-            shorter += candidates.sorted { $0.probability > $1.probability }.prefix(Self.shorterWordLimit)
+            shorter += candidates.sorted { $0.probability > $1.probability }.prefix(Self.shorterWordLimit) + beforeKana
         }
         return shorter
     }
 
+    /// Whether the keys of a Latin word (`word`) from `end` read as kana together with the keys that follow the word, up
+    /// to three of them that romaji has read: the word took the first letter of a kana (s in SoftBanks|ha, which reads
+    /// しゃ with the ha after it), so a shorter word leaves a letter that is not romaji on its own
+    static func leftOverReadsOn(from end: Int, of word: Range<Int>, in input: TypedInput) -> Bool {
+        (1 ... 3).contains { word.upperBound + $0 <= input.typingFrom && input.readsAsKana(end ..< word.upperBound + $0) }
+    }
+
     /// At most this many longer words for each word, the likeliest
     static let longerWordLimit = 2
+    /// How many keys past a word started with a capital its end is compared at a consonant (see `longerWords`)
+    static let nameEndKeys = 2
 
     /// Where each of `words` may end later (see `ScriptSegmentation.longerWords`): at a word the lexicon knows (Finder
     /// for Find in Finderuindou), from the same start, likely enough by `posteriors` (as for a shorter word), over
-    /// lower-case letters the model read as romaji (`tags`) that romaji has read
+    /// lower-case letters the model read as romaji (`tags`) that romaji has read. A word started with a capital is also
+    /// compared ending up to `nameEndKeys` keys later at a consonant the kana after it can do without, known or not
+    /// (Lakers|ha for Laker|sha in Lakershakachimashita, Banks|sha for Bank|ssha, Lexus|ha for Lex|usha): the model gives
+    /// such a name's last letters to the kana, and only the Japanese after it tells them apart. Not at an n, which closes
+    /// a kana (Kanagawa|ken, Sato|san: the suffix is Japanese), and only where another consonant follows, the kana
+    /// keeping a reading without the letter (s|ha, not s|o): each word compared is scored again at every key
     private func longerWords(of words: [LatinInputGuess.Span], in input: TypedInput, tags: [ScriptTag], posteriors: [[Double]]) -> [ScriptSegmentation.LongerWord] {
         var longer: [ScriptSegmentation.LongerWord] = []
         for word in words where word.keys.count >= 2 {
@@ -1563,6 +1622,7 @@ struct TaggerScriptIdentifier: ScriptIdentifier {
                 continue
             }
             var candidates: [ScriptSegmentation.LongerWord] = []
+            var nameEnds: [ScriptSegmentation.LongerWord] = []
             for end in word.keys.upperBound + 1 ... last {
                 let key = input.keys[end - 1]
                 guard tags[end - 1] == .japanese, key.isASCII, key.isLetter, key.isLowercase else {
@@ -1570,12 +1630,16 @@ struct TaggerScriptIdentifier: ScriptIdentifier {
                 }
                 let probability = posteriors[start][end - start - 1]
                 let typed = String(input.keys[start ..< end])
-                guard probability >= Self.shorterWordThreshold, self.knows(typed) else {
-                    continue
+                let candidate = ScriptSegmentation.LongerWord(word: word.keys, longer: .init(word: self.writing(of: typed), keys: start ..< end), probability: probability)
+                if input.keys[start].isUppercase, end <= word.keys.upperBound + Self.nameEndKeys, !"aiueon".contains(key),
+                   end < input.typingFrom, !"aiueo".contains(input.keys[end]),
+                   (1 ... 3).contains(where: { end + $0 <= input.typingFrom && input.readsAsKana(end ..< end + $0) }) {
+                    nameEnds.append(candidate)
+                } else if probability >= Self.shorterWordThreshold, self.knows(typed) {
+                    candidates.append(candidate)
                 }
-                candidates.append(.init(word: word.keys, longer: .init(word: self.writing(of: typed), keys: start ..< end), probability: probability))
             }
-            longer += candidates.sorted { $0.probability > $1.probability }.prefix(Self.longerWordLimit)
+            longer += candidates.sorted { $0.probability > $1.probability }.prefix(Self.longerWordLimit) + nameEnds
         }
         return longer
     }
@@ -1637,7 +1701,7 @@ struct TaggerScriptIdentifier: ScriptIdentifier {
     private func probabilityWithoutTypingCosts(_ probability: Double, keys: Range<Int>, input: TypedInput) -> Double {
         let decoding = self.finalDecoding
         let count = input.keys.count
-        let extra = decoding.cost(withCapital: false, endingAt: keys.upperBound, count: count, isComplete: input.isComplete, typingFrom: input.typingFrom)
+        let extra = decoding.cost(withCapital: false, endingAt: keys.upperBound, count: count, isComplete: input.readsAsComplete, typingFrom: input.typingFrom)
             - decoding.cost(withCapital: false, endingAt: keys.upperBound, count: count, isComplete: true)
         guard extra > 0, probability < 1 else {
             return probability
@@ -1655,9 +1719,9 @@ struct TaggerScriptIdentifier: ScriptIdentifier {
     /// The words the model is not sure about by `posteriors` (of the lattice with its decoding costs applied, see
     /// `ScriptTaggerLattice.posteriors`), typed in lower case and reading as Japanese in standard romaji (not cafe: c
     /// without h is typed as the word on purpose, so the model's own reading stands, as for a word typed with a capital).
-    /// A word typed with a capital that the model reads as romaji all the same (`tags`; the T of Tokyotonisumu, read as
-    /// と+kyoto) is one too when the lexicon knows it: the converter weighs it against the words it reads instead. The
-    /// lexicon's spelling goes with the letters when it knows one (API for api)
+    /// A word typed with a capital is one only where the capital is still read as romaji (`tags`: no Latin word can start
+    /// at it, see `ScriptTaggerLattice.keepingCapitalsLatin`) and the lexicon knows it. The lexicon's spelling goes with
+    /// the letters when it knows one (API for api)
     private func uncertainWords(in input: TypedInput, tags: [ScriptTag], posteriors: (keys: [[Double]], words: [[Double]])) -> [ScriptSegmentation.UncertainWord] {
         var uncertain: [ScriptSegmentation.UncertainWord] = []
         for (start, lengths) in posteriors.words.enumerated() {

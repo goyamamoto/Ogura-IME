@@ -144,13 +144,13 @@ func clauseEndMovesIntoALatinWordWhoseEndIsNoKanaBoundary() {
 
 /// A session converting with Zenzai and live conversion, with the rules for Latin words or the bundled model
 @MainActor
-private func makeSession(learned: Bool = false) -> (InputSession, RecordingHost) {
+private func makeSession(learned: Bool = false, zenzai: Bool = true) -> (InputSession, RecordingHost) {
     let manager = SegmentsManager(
         kanaKanjiConverter: KanaKanjiConverter.withDefaultDictionary(),
         applicationDirectoryURL: freshTestLearningDirectory(),
         personalizationDirectoryURL: nil,
         context: .init(
-            useZenzai: true,
+            useZenzai: zenzai,
             resourcesDirectoryURL: resourcesDirectory,
             liveConversionEnabled: true,
             learnedScriptIdentification: learned,
@@ -171,6 +171,26 @@ private func type(_ keys: String, into session: InputSession) {
         let text = String(character)
         _ = session.handle(KeyEventCore(modifierFlags: character.isUppercase ? [.shift] : [], characters: text, charactersIgnoringModifiers: text.lowercased(), keyCode: 0))
     }
+}
+
+@MainActor
+@Test("Shift+← は Space の後の文節を縮め、入力の残り全部にはしない。Zenzai を切っていても同じ", .enabled(if: hasZenzaiWeights), arguments: ["kiwomita", "nekogatewonameta", "kyouhameashitaha"], [false, true])
+func shiftLeftShrinksTheClauseWithZenzaiOnAndOff(_ keys: String, _ zenzai: Bool) {
+    let (session, host) = makeSession(zenzai: zenzai)
+    type(keys, into: session)
+    #expect(session.handle(KeyEventCore(modifierFlags: [], characters: " ", charactersIgnoringModifiers: " ", keyCode: 49)))
+    var shown = [host.focused + "|" + host.rest]
+    var lengths = [host.focused.count]
+    for _ in 0 ..< 6 {
+        #expect(session.handle(KeyEventCore(modifierFlags: [.shift], characters: nil, charactersIgnoringModifiers: nil, keyCode: 123)))
+        shown.append(host.focused + "|" + host.rest)
+        lengths.append(host.focused.count)
+        // Never the whole rest of the input
+        #expect(!host.rest.isEmpty, "\(keys) zenzai \(zenzai): \(shown)")
+    }
+    // Never longer, and down to one character
+    #expect(zip(lengths, lengths.dropFirst()).allSatisfy { $0.1 <= $0.0 }, "\(keys) zenzai \(zenzai): \(shown)")
+    #expect(lengths.last == 1, "\(keys) zenzai \(zenzai): \(shown)")
 }
 
 @MainActor

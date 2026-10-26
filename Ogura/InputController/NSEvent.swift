@@ -8,7 +8,8 @@ extension NSEvent {
             characters: self.characters,
             charactersIgnoringModifiers: self.charactersIgnoringModifiers,
             keyCode: self.keyCode,
-            timestamp: self.timestamp
+            timestamp: self.timestamp,
+            isRepeat: self.isARepeat
         )
     }
 }

@@ -17,13 +17,25 @@ struct TypedInput {
     var prefixKana = [""]
     /// The convert key was pressed, so the input is complete
     var isComplete = false
+    /// No key will follow although the input has no separator (typing stopped, or Enter commits it as it is): the learned
+    /// identification layer reads the input as complete, so a word typed last runs over the letters romaji has not read
+    /// yet (iPad, not IPA and a d still being typed). Only the model's reading changes: those letters stay unread
+    /// (`typingFrom`), so the checks still leave them out of the readings they compare (褒めt is not homet), and the
+    /// rules read the input as before
+    var finished = false
+    /// Whether the learned identification layer reads the input as complete (see `finished`)
+    var readsAsComplete: Bool {
+        self.isComplete || self.finished
+    }
     /// The key that the clause being converted ends before, when Shift+← / → moved its end into the input: no Latin
     /// word runs across it, so moving the end into a Latin word splits it there (Sake|hasake)
     var clauseEnd: Int?
 
     /// Nil when a piece of the input is not a key. `clauseEnd` is the element of the input the clause being converted
-    /// ends before, when its end was moved (see `SegmentsManager.clauseEnd`); without it, the cursor of the input says
-    init?(_ composingText: ComposingText, clauseEnd: Int? = nil) {
+    /// ends before, when its end was moved (see `SegmentsManager.clauseEnd`); without it, the cursor of the input says.
+    /// `finished`: no key will follow (see `finished`)
+    init?(_ composingText: ComposingText, clauseEnd: Int? = nil, finished: Bool = false) {
+        self.finished = finished
         var prefix = ComposingText()
         for (index, element) in composingText.input.enumerated() {
             if case .compositionSeparator = element.piece {
@@ -118,9 +130,14 @@ struct ScriptSegmentation {
     /// Capitals that start a Latin word whose end is left to the converter (O in korehaOguradesu): read as romaji
     /// again, the word can end anywhere the converter finds natural (Ogura|です)
     var openCapitals: [Int] = []
-    /// Capitals that are romaji all the same (K in Kyouhaiitenkidesu, typed at the start out of habit): the converter
-    /// sees them in lower case, so they make kana
+    /// Capitals the model reads as romaji (A in Arigatougozaimasu, typed at the start out of habit): where no Latin word
+    /// covers them, the converter sees them in lower case, so they make kana
     var romajiCapitals: [Int] = []
+    /// The Latin words of the model's own reading, when it reads a capital as romaji and none of the letters of the word
+    /// that capital starts as Latin (not Tesla, which it reads て+sla). A capital marks Latin, so `latinWords` keeps it
+    /// a letter; the checks take this reading only when the input is clearly Japanese (see
+    /// `SegmentsManager.capitalKanaMargin`)
+    var capitalsAsRomaji: [LatinInputGuess.Span]?
     /// Words typed in lower case that read as Japanese too, in standard romaji, which the identification layer is not
     /// sure about (token in tokenwohakkousuru; not cafe, typed as the word on purpose), and words it knows typed with a
     /// capital it reads as romaji all the same (Tokyo in Tokyotonisumu, read as と+kyoto): the converter reads their keys
@@ -133,7 +150,8 @@ struct ScriptSegmentation {
     /// (Winの側, sign-inして, 作品map, see `SegmentsManager.keepingNaturalJapanese`)
     var shorterWords: [ShorterWord] = []
     /// Where a Latin word may end later than decided, at a word the lexicon knows (Finder for Find in Finderuindou, read
-    /// as Find+えるいんどう when the model finds the two ends about as likely): the converter can prefer the longer word
+    /// as Find+えるいんどう when the model finds the two ends about as likely), or a little later at a consonant for a word
+    /// typed with a capital (Lakers for Laker+しゃ in Lakershakachimashita): the converter can prefer the longer word
     /// when the input is clearly likelier so (Finderウインドウ rather than Find得る引導, see
     /// `SegmentsManager.keepingNaturalJapanese`)
     var longerWords: [LongerWord] = []
@@ -151,6 +169,12 @@ struct ScriptSegmentation {
         var probability: Double
         /// The lexicon knows the shorter word; otherwise it starts with a capital and may be a name (Osaka in Osakashi)
         var known = true
+        /// Offered though unlikely by the model, since the keys left over are one kana of two consonants and a vowel
+        /// (Tesla|sha): the checks ask more of it (see `SegmentsManager.beforeKanaMargin`)
+        var beforeKana = false
+        /// The word as decided took the first letter or two of that kana (PayPals|ha for PayPal|sha): the checks ask less
+        /// of the shorter word (see `SegmentsManager.kanaHeadMargin`)
+        var tookKanaHead = false
     }
 
     struct LongerWord: Equatable {

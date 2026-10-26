@@ -109,6 +109,9 @@ public final class SegmentsManager {
         /// The candidates are the converter's own, without what Ogura does on top of it (Latin words, letters written
         /// for kana, the first clause): for comparing the two
         var convertsAsTheConverterDoes = false
+        /// Once no key will follow, the letters the input ends with are written as the identification layer writes the
+        /// last word of the finished input (see `writingLastWord`); off only to measure what that changes
+        var writesLastWordAsFinished = true
         /// The weights Zenzai converts with, in place of the model chosen (see `SegmentsManager.zenzaiWeightURL`): for
         /// comparing models
         var zenzaiWeightURL: URL?
@@ -340,6 +343,10 @@ public final class SegmentsManager {
     /// what is left after the clause being converted is shown from it, so a Latin word there shows as typed (windows,
     /// not うぃんどws)
     private var latinWordsInput: ComposingText?
+    /// The Latin words the naturalness checks kept as letters at the last conversion while typing, with the keys of the
+    /// input then (see `lettersShownBefore`): the checks keep them as letters while typing goes on (see
+    /// `keepingNaturalJapanese`)
+    private var lettersShown: (keys: [Character], words: [LatinInputGuess.Span])?
     /// The best conversion of the whole of the input being converted, kept while the end of the clause moves inside it:
     /// the input after the clause is shown from it (see `restText`)
     private var wholeConversion: Candidate?
@@ -384,6 +391,7 @@ public final class SegmentsManager {
         var showingAdditionalCandidateCount: Int
         var isFixingAdditionalCandidateTop: Bool
         var thoroughConversion: ThoroughConversion
+        var lastWordAsFinished: String?
     }
 
     /// The thorough conversion of the input as it stands, run once typing stops (see `showThoroughConversion`)
@@ -436,7 +444,8 @@ public final class SegmentsManager {
                 additionalCandidates: self.additionalCandidates,
                 showingAdditionalCandidateCount: self.showingAdditionalCandidateCount,
                 isFixingAdditionalCandidateTop: self.isFixingAdditionalCandidateTop,
-                thoroughConversion: self.thoroughConversion
+                thoroughConversion: self.thoroughConversion,
+                lastWordAsFinished: self.lastWordAsFinished
             )
         }
         set {
@@ -457,6 +466,7 @@ public final class SegmentsManager {
             self.showingAdditionalCandidateCount = newValue.showingAdditionalCandidateCount
             self.isFixingAdditionalCandidateTop = newValue.isFixingAdditionalCandidateTop
             self.thoroughConversion = newValue.thoroughConversion
+            self.lastWordAsFinished = newValue.lastWordAsFinished
         }
     }
     /// Tells which parts of the input are Latin words (see `ScriptIdentifier`): the learned identification layer when the
@@ -769,6 +779,7 @@ public final class SegmentsManager {
         }
         self.rawCandidates = nil
         self.latinWordsInput = nil
+        self.lettersShown = nil
         self.forgetClauses()
         self.didExperienceSegmentEdition = false
         self.lastOperation = .other
@@ -794,6 +805,7 @@ public final class SegmentsManager {
         self.stopConversion()
         self.rawCandidates = nil
         self.latinWordsInput = nil
+        self.lettersShown = nil
         self.forgetClauses()
         self.didExperienceSegmentEdition = false
         self.lastOperation = .other
@@ -819,6 +831,7 @@ public final class SegmentsManager {
         self.leaveClauses()
         self.rawCandidates = nil
         self.latinWordsInput = nil
+        self.lettersShown = nil
         self.didExperienceSegmentEdition = false
         self.lastOperation = .other
         self.withConverter { $0.commitUpdateLearningData() }
@@ -1849,16 +1862,23 @@ public final class SegmentsManager {
     /// - A capital that starts a word whose end is left to the converter (O in korehaOguradesu) is read as romaji again
     ///   (お), and each way the word could end (Og, Ogura, Oguradesu, ...) is offered as a temporary dictionary entry, so
     ///   the converter can write これはOguraです.
-    /// - A capital that is romaji all the same (K in Kyouhaiitenkidesu) is read as romaji (き).
+    /// - A capital of clearly Japanese input (A in Arigatougozaimasu, see `capitalKanaMargin`) is read as romaji (あ).
     /// Only what the converter sees changes: each key keeps its place, so candidates still count the same keys.
-    private func latinWordsConversionText(otherReading: Bool = false, contexts: ConversionContexts) -> LatinWordsConversion? {
+    private func latinWordsConversionText(otherReading: Bool = false, contexts: ConversionContexts, thorough: Bool = false) -> LatinWordsConversion? {
         guard Config.LatinCandidateForNonJapaneseInput().value,
               self.composingText.input.allSatisfy({ $0.inputStyle != .direct }),
               self.composingText.input.last?.piece != .compositionSeparator || self.composingText.input.count > 1,
               let input = TypedInput(self.composingText, clauseEnd: self.clauseEnd) else {
+            self.lettersShown = nil
             return nil
         }
         var segmentation = self.scriptIdentifier.segment(input)
+        // The words the checks kept as letters at the last conversion while typing stay letters more readily (see
+        // `keepingNaturalJapanese`); the thorough conversion once typing stops reads the input afresh, and typing goes
+        // on from what it shows
+        let shownBefore = thorough ? [] : self.lettersShownBefore(input)
+        var lettersChecked: [LatinInputGuess.Span] = []
+        defer { self.lettersShown = (input.keys, lettersChecked) }
         guard !segmentation.isEmpty || self.hasHalfWidthMarks(in: input) else {
             return nil
         }
@@ -1882,9 +1902,10 @@ public final class SegmentsManager {
             segmentation.possibleWords += segmentation.uncertainWords.filter { $0.keys.upperBound <= input.typingFrom }.map {
                 .init(word: .init(word: $0.spelling ?? $0.word, keys: $0.keys), probability: $0.probability)
             }
-            let natural = self.keepingNaturalJapanese(segmentation, input: input, leftSideContext: contexts.appLeft ?? "")
+            let natural = self.keepingNaturalJapanese(segmentation, input: input, leftSideContext: contexts.appLeft ?? "", shownBefore: shownBefore)
             segmentation.latinWords = natural.words
             otherWords = natural.otherWords
+            lettersChecked = natural.checked
             leftAsKana.removeAll { word in natural.words.contains { $0.keys == word.keys } || otherWords.contains { $0.keys == word.keys } }
             // The rest stay kana: Zenzai would write them as letters from their temporary entries on its own (山のmine
             // for yamanomine), past the converter's scores and the checks
@@ -1912,18 +1933,29 @@ public final class SegmentsManager {
     /// yakusokuwosuppokashita すっぽ with po). Keys that spell Japanese in standard romaji are Japanese when in doubt;
     /// code (not kode), or a word started with Shift, is typed as the word on purpose
     private static func couldBeJapanese(_ word: LatinInputGuess.Span, input: TypedInput) -> Bool {
+        Self.japaneseMargin(word, input: input) != nil
+    }
+
+    /// How much likelier Zenzai must find the keys of `word` read as kana than as letters for them to stay Japanese,
+    /// when it could be meant as Japanese (see `couldBeJapanese`): the margin of the spellings its keys are typed with
+    /// (`StandardRomaji.margin`, from the romaji spelling catalog), the lowest over the ends it may read to; nil when it
+    /// could not
+    private static func japaneseMargin(_ word: LatinInputGuess.Span, input: TypedInput) -> Float? {
         guard word.word.count >= 2, word.word.allSatisfy({ $0.isASCII && $0.isLowercase || $0 == "-" }) else {
-            return false
+            return nil
         }
         let (start, last) = (word.keys.lowerBound, min(word.keys.upperBound + Self.kanaOverrun, input.typingFrom))
         // A word running into the keys romaji has not read yet is still being typed
         guard last >= word.keys.upperBound else {
-            return false
+            return nil
         }
-        return (word.keys.upperBound ... last).contains { end in
+        return (word.keys.upperBound ... last).compactMap { end -> Float? in
             let keys = input.keys[start ..< end]
-            return keys.allSatisfy({ $0.isASCII && $0.isLowercase || $0 == "-" }) && StandardRomaji.spells(keys) && input.kana(of: start ..< end) != nil
-        }
+            guard keys.allSatisfy({ $0.isASCII && $0.isLowercase || $0 == "-" }), input.kana(of: start ..< end) != nil else {
+                return nil
+            }
+            return StandardRomaji.margin(keys)
+        }.min()
     }
 
     /// How many keys after a Latin word the kana its last letter starts may take (ryo, っぽ as ppo, っち as cchi)
@@ -1935,6 +1967,20 @@ public final class SegmentsManager {
     /// cost of と犬), since Space offers the other reading either way (see `LatinWordsConversion.otherReading`)
     static let naturalJapaneseMargin: Float = 3
 
+    /// For an evaluation: what each comparison of a word read as letters and as kana found (the keys, the margin of their
+    /// spellings, how much likelier the letters were, and which went on), line by line; nil in the app
+    public nonisolated(unsafe) static var naturalnessTracer: (@Sendable (String) -> Void)?
+    /// For an evaluation: how many readings Zenzai scored for the naturalness checks (each costs a run of the model)
+    static let naturalnessScorings = SharedCount()
+    public static var naturalnessScoringCount: Int {
+        Self.naturalnessScorings.value
+    }
+
+    /// For an evaluation: the romaji margins in effect (see `RomajiSpellings.margin`), for the first line of its results
+    public static var romajiMarginsDescription: String {
+        RomajiSpellings.marginsDescription
+    }
+
     /// How much likelier, in natural log, Zenzai must find the keys of a word the identification layer reads as
     /// Japanese written as letters than read as kana for them to be letters (see `ScriptSegmentation.possibleWords`).
     /// The other way round from `naturalJapaneseMargin`: the letters win only when the Japanese reading is clearly the
@@ -1945,8 +1991,10 @@ public final class SegmentsManager {
     /// `ScriptSegmentation.shorterWords`) read as romaji than as the word's letters for the word to end there. The word
     /// is read as decided, so it ends earlier only when the Japanese after the shorter word is likelier: Winの側 for
     /// Winnogawa and Fanの中身 for Fannonakami are 9 to 12 likelier, Web上 for Webue (read as one word) 1.5, while Pi for
-    /// Pinn (ん), still being typed, is within 1. Shorter words the lexicon does not know are not offered (T-sha for
-    /// T-shatsu), so the margin need not keep them out
+    /// Pinn (ん), still being typed, is within 1. A shorter word the lexicon does not know is compared the same way when
+    /// it is typed with a capital (SoftBank社 for SoftBankshano…, read as SoftBanks+は or as SoftBanksha: the name is
+    /// not in the lexicon, and what tells the two readings apart is the Japanese after it); one typed in lower case is
+    /// not offered (T-sha for T-shatsu)
     static let shorterWordMargin: Float = 1
 
     /// The same as `shorterWordMargin` when the shorter word is a name the converter's dictionary knows (Osaka, 大阪; see
@@ -1955,11 +2003,53 @@ public final class SegmentsManager {
     /// name ends wherever Zenzai finds the rest likelier read as romaji
     static let shorterNameMargin: Float = 0
 
+    /// How much likelier, in natural log, the input must be with a capital read as kana than as a letter for the capital
+    /// to be kana (see `ScriptSegmentation.capitalsAsRomaji`): a capital marks Latin, so only clearly Japanese input
+    /// (Arigatougozaimasu) reads it as kana. Sentences of Japanese typed with a capital first are 16 to 26 likelier as
+    /// kana, and names that read as Japanese too 1 to 6 (Kobe, Hades)
+    static let capitalKanaMargin: Float = 10
+
+    /// The same as `shorterWordMargin` for a shorter word the model finds unlikely, before a kana of two consonants and a
+    /// vowel (see `ScriptSegmentation.ShorterWord.beforeKana`): Tesla社 for Teslasha or Teslas|ha is 2.7 to 7.5 likelier,
+    /// while a name cut there is no likelier (Takaha氏 for Takahashi is less likely by 15)
+    static let beforeKanaMargin: Float = 2
+
+    /// The same as `shorterWordMargin` when the word as decided took the first letter of that kana (see
+    /// `ScriptSegmentation.ShorterWord.tookKanaHead`). Negative: Zenzai reads kana and does not see that は after 社 is
+    /// natural where は after は is not, so the shorter word stands unless it is clearly less likely. PayPal社は for
+    /// PayPals|ha is 1.5 less likely, and names that do end in the letter 4.3 or more (Celtics, Simpsons)
+    static let kanaHeadMargin: Float = -2
+
     /// How much likelier, in natural log, Zenzai must find the input with a Latin word read on over the kana after it
     /// (see `ScriptSegmentation.longerWords`) than as decided for the word to end there. Kana become letters, so the
     /// longer word has to be clearly likelier, as for a word that could be Japanese (`naturalJapaneseMargin`):
     /// Finderウインドウ for Find+えるいんどう (Find得る引導) is about 25 likelier
     static let longerWordMargin: Float = 3
+
+    /// How much likelier still, in natural log, Zenzai must find the keys of a Latin word shown as letters at the last
+    /// conversion while typing read as kana for the word to turn into kana at this key (see `keepingNaturalJapanese`):
+    /// the readings compared change with each key while the word after the Latin word is being typed (tokenを発行す
+    /// against と券を発行す, then tokenを発行する against と券を発行する), and a word that turns into kana for a key or two
+    /// and back is flicker. Added to `naturalJapaneseMargin` for a word the identification layer reads as Latin, and in
+    /// place of `unnaturalJapaneseMargin` for one it reads as Japanese: once shown as letters, the word is kept the same
+    /// way whichever the layer reads it as, and the disagreement rule (see `JudgeWeights.confidentDisagreement`), which
+    /// also sways from key to key, waits. Only while typing: the thorough conversion once typing stops decides afresh,
+    /// so what is committed does not change, and only what is shown between keys does. A capitalized word's end can
+    /// still be decided again, and a word that reads as kana after all still turns into kana once
+    static let shownMargin: Float = 6
+
+    /// The Latin words the checks kept as letters at the last conversion while typing that `input` still has: those
+    /// within the keys it shares with the input then from the start, typed on or deleted back to (see `lettersShown`)
+    private func lettersShownBefore(_ input: TypedInput) -> [LatinInputGuess.Span] {
+        guard let shown = self.lettersShown else {
+            return []
+        }
+        let common = min(shown.keys.count, input.keys.count)
+        guard shown.keys.prefix(common).elementsEqual(input.keys.prefix(common)) else {
+            return []
+        }
+        return shown.words.filter { $0.keys.upperBound <= common }
+    }
 
     /// What `keepingNaturalJapanese` leaves
     struct NaturalReading {
@@ -1969,6 +2059,12 @@ public final class SegmentsManager {
         /// `LatinWordsConversion.otherReading`): each word that could be Japanese the other way round, and each word
         /// typed with a capital that may end earlier at its other end
         var otherWords: [LatinInputGuess.Span]
+        /// The words among `words` the checks compared with their kana reading, with kana read after them, and kept as
+        /// letters: what the next conversion while typing keeps as letters more readily (see `shownMargin`). Not a word
+        /// still being typed, which is letters only because it cannot be checked yet (mine with the n of minen unread),
+        /// nor one checked with nothing read after it (mine against みね at minen), where the keys that follow tell the
+        /// most, nor a word the checks do not apply to
+        var checked: [LatinInputGuess.Span]
     }
 
     /// The Latin words of `segmentation` but those that could be Japanese (see `couldBeJapanese`) whose keys Zenzai
@@ -1977,8 +2073,11 @@ public final class SegmentsManager {
     /// where the identification layer finds it plausible (see `ScriptSegmentation.shorterWords`) and Zenzai finds the
     /// keys left over likelier read as romaji (Winの側 for Winnogawa, read as one name; Macは拡張 for Machakaku). Zenzai
     /// scores how likely each reading of the input typed so far is, the word as letters and as kana, after the left
-    /// context; with a reading judge (see `Context.readingJudge`), the judge scores each reading too
-    private func keepingNaturalJapanese(_ segmentation: ScriptSegmentation, input: TypedInput, leftSideContext: String) -> NaturalReading {
+    /// context; with a reading judge (see `Context.readingJudge`), the judge scores each reading too. The words
+    /// `shownBefore`, shown as letters at the last conversion while typing, stay letters unless their kana reading is
+    /// likelier by `shownMargin` more
+    private func keepingNaturalJapanese(_ identified: ScriptSegmentation, input: TypedInput, leftSideContext: String, shownBefore: [LatinInputGuess.Span]) -> NaturalReading {
+        var segmentation = identified
         let weight = self.zenzaiCheckWeightURL
         // The letters romaji has not read yet at the end: they read like more of a Latin word (Sakeハsakeデs, homet for
         // 褒めt, タカイmineニn), so the readings are compared without them, also when a Latin word runs to the end of the
@@ -2017,6 +2116,7 @@ public final class SegmentsManager {
             if let score = scores[key] {
                 return score
             }
+            Self.naturalnessScorings.add(1)
             var score = self.withConverter { $0.zenzaiInputLogProbability(compared.toKatakana(), leftSideContext: leftSideContext, modelURL: weight) }
                 .map { ReadingScore(zenzai: $0, complete: compared == typed) }
             // Without the judge's score (while it is still loading, or when it fails), Zenzai's alone
@@ -2044,22 +2144,47 @@ public final class SegmentsManager {
             }
             return letters(other) > letters(words) ? self.preference(changed, over: asIs, differing: differing) : self.preference(asIs, over: changed, differing: differing)
         }
+        // A capital stays a letter unless the letters make no sense and the input is clearly Japanese
+        if let kana = identified.capitalsAsRomaji {
+            let shown = identified.latinWords.contains { shownBefore.contains($0) && !kana.contains($0) }
+            let margin = Self.capitalKanaMargin + (shown ? Self.shownMargin : 0)
+            if let asLetters = preference(of: kana, against: identified.latinWords, differing: .word), asLetters.letters < -margin {
+                segmentation.latinWords = kana
+            }
+        }
         var words = segmentation.latinWords
         var otherWords = segmentation.latinWords
-        for word in segmentation.latinWords where Self.couldBeJapanese(word, input: input) {
+        var checked: [LatinInputGuess.Span] = []
+        for word in segmentation.latinWords {
+            // How far the comparison leans to kana for the spellings the keys are typed with (Japanese when in doubt for
+            // the standard ones), and further for a word kept in letters at the key before (see `shownMargin`)
+            guard let spellingMargin = Self.japaneseMargin(word, input: input) else {
+                continue
+            }
             let others = words.filter { $0.keys != word.keys }
-            if let asLetters = preference(of: others, against: words, differing: .word), asLetters.japanese || asLetters.letters < -Self.naturalJapaneseMargin {
+            let shown = shownBefore.contains(word)
+            let margin = spellingMargin + (shown ? Self.shownMargin : 0)
+            let asLetters = preference(of: others, against: words, differing: .word)
+            if let asLetters, asLetters.japanese && !shown || asLetters.letters < -margin {
                 words = others
             } else {
                 otherWords.removeAll { $0.keys == word.keys }
+                if asLetters != nil, word.keys.upperBound < input.typingFrom {
+                    checked.append(word)
+                }
+            }
+            if let tracer = Self.naturalnessTracer {
+                let keys = String(input.keys[word.keys])
+                tracer("\(keys) margin \(margin) letters \(asLetters.map { String(format: "%.2f", $0.letters) } ?? "unscored")\(asLetters?.japanese == true ? " (disagreement: Japanese)" : "") → \(words.contains { $0.keys == word.keys } ? "letters" : "kana")")
             }
         }
-        let unnatural = Self.addingUnnaturalJapanese(segmentation.possibleWords, to: words) { preference(of: $1, against: $0, differing: .word) }
+        let unnatural = Self.addingUnnaturalJapanese(segmentation.possibleWords, to: words, shownBefore: shownBefore) { preference(of: $1, against: $0, differing: .word) }
+        checked += unnatural.words.filter { !words.contains($0) && $0.keys.upperBound < input.typingFrom }
         words = unnatural.words
         otherWords = (otherWords + unnatural.offered).sorted { $0.keys.lowerBound < $1.keys.lowerBound }
         let ended = self.endingEarlier(segmentation, input: input, words: words, otherWords: otherWords) { preference(of: $1, against: $0, differing: .end, upTo: $2)?.letters }
         let extended = self.endingLater(segmentation, words: ended.words, otherWords: ended.otherWords) { preference(of: $1, against: $0, differing: .end, upTo: $2)?.letters }
-        return NaturalReading(words: extended.words, otherWords: extended.otherWords)
+        return NaturalReading(words: extended.words, otherWords: extended.otherWords, checked: checked.filter { extended.words.contains($0) })
     }
 
     /// The scores of a reading the naturalness checks compare: Zenzai's log-probability of it as input, and the reading
@@ -2162,10 +2287,12 @@ public final class SegmentsManager {
 
     /// `words` with each word ending at a shorter word (see `ScriptSegmentation.shorterWords`) where Zenzai finds the keys
     /// left over clearly likelier read as romaji, and `otherWords` with the likeliest shorter word in place of each word
-    /// that does not, to offer. Only keys that spell standard romaji are read as Japanese (see `couldBeJapanese`), and a
-    /// shorter word the lexicon does not know only when it is a name the converter's dictionary knows (see
-    /// `shorterNameMargin`). `preference` tells how much likelier the reading with the first Latin words, the reading as
-    /// it is, which has more letters, is than the one with the second, up to a key when given
+    /// that does not, to offer. Only keys that spell standard romaji are read as Japanese (see `couldBeJapanese`), on
+    /// their own or with the keys that follow the word (the s of SoftBanks with the ha after it, see
+    /// `leftOverSpellsRomaji`), and a shorter word the lexicon does not know only when it is a name the converter's
+    /// dictionary knows (see `shorterNameMargin`) or is typed with a capital. `preference` tells how much likelier the
+    /// reading with the first Latin words, the reading as it is, which has more letters, is than the one with the second,
+    /// up to a key when given
     private func endingEarlier(
         _ segmentation: ScriptSegmentation,
         input: TypedInput,
@@ -2176,8 +2303,8 @@ public final class SegmentsManager {
         var (words, otherWords) = (words, otherWords)
         for word in segmentation.latinWords {
             let shorterWords = segmentation.shorterWords.filter {
-                $0.word == word.keys && StandardRomaji.spells(String(input.keys[$0.shorter.keys.upperBound ..< word.keys.upperBound]))
-                    && ($0.known || self.japaneseName(of: $0.shorter.word) != nil)
+                $0.word == word.keys && Self.leftOverSpellsRomaji(from: $0.shorter.keys.upperBound, of: word.keys, in: input)
+                    && ($0.known || self.japaneseName(of: $0.shorter.word) != nil || input.keys[$0.shorter.keys.lowerBound].isUppercase)
             }
             let upTo = Self.nextWord(after: word.keys, in: words)
             guard !shorterWords.isEmpty, let index = words.firstIndex(where: { $0.keys == word.keys }) else {
@@ -2187,7 +2314,8 @@ public final class SegmentsManager {
             for shorter in shorterWords {
                 var ended = words
                 ended[index] = shorter.shorter
-                let margin = self.japaneseName(of: shorter.shorter.word) != nil ? Self.shorterNameMargin : Self.shorterWordMargin
+                let margin = shorter.tookKanaHead ? Self.kanaHeadMargin : shorter.beforeKana ? Self.beforeKanaMargin
+                    : self.japaneseName(of: shorter.shorter.word) != nil ? Self.shorterNameMargin : Self.shorterWordMargin
                 // The shorter word read is likelier by how much the word as it is is less likely
                 if let likelier = preference(words, ended, upTo).map({ -$0 }), likelier > margin, likelier > (best?.preference ?? -.infinity) {
                     best = (ended, likelier)
@@ -2203,13 +2331,31 @@ public final class SegmentsManager {
         return (words, otherWords)
     }
 
+    /// Whether the keys of a Latin word (`word`) from `end`, left over by a shorter word, spell standard romaji: on their
+    /// own (hakaku in Mac|hakaku), or with up to three of the keys that follow the word when the word took the first
+    /// letter of a kana (s in SoftBanks|ha: sha)
+    private static func leftOverSpellsRomaji(from end: Int, of word: Range<Int>, in input: TypedInput) -> Bool {
+        guard end <= word.upperBound else {
+            return false
+        }
+        if StandardRomaji.spells(String(input.keys[end ..< word.upperBound])) {
+            return true
+        }
+        return (1 ... 3).contains {
+            word.upperBound + $0 <= input.keys.count && StandardRomaji.spells(String(input.keys[end ..< word.upperBound + $0]).lowercased())
+        }
+    }
+
     /// `words` with the words read as Japanese that the identification layer knows as Latin words (see
     /// `ScriptSegmentation.possibleWords`) whose Japanese reading Zenzai finds clearly less likely, and the others whose
-    /// Japanese reading it does not find clearly more likely, to offer as letters. `preference` tells how the reading
-    /// with the second Latin words, which has more letters, compares with the one with the first, the reading as it is
+    /// Japanese reading it does not find clearly more likely, to offer as letters. A word in `shownBefore`, shown as
+    /// letters at the last conversion while typing, stays letters as a word the layer reads as Latin would (see
+    /// `shownMargin`). `preference` tells how the reading with the second Latin words, which has more letters, compares
+    /// with the one with the first, the reading as it is
     private static func addingUnnaturalJapanese(
         _ possibleWords: [ScriptSegmentation.PossibleWord],
         to words: [LatinInputGuess.Span],
+        shownBefore: [LatinInputGuess.Span],
         preference: ([LatinInputGuess.Span], [LatinInputGuess.Span]) -> ReadingPreference?
     ) -> (words: [LatinInputGuess.Span], offered: [LatinInputGuess.Span]) {
         var words = words
@@ -2219,7 +2365,9 @@ public final class SegmentsManager {
             guard let asLetters = preference(words, added) else {
                 continue
             }
-            if !asLetters.japanese, asLetters.letters > Self.unnaturalJapaneseMargin {
+            let shown = shownBefore.contains(possible.word)
+            let margin = shown ? -(Self.naturalJapaneseMargin + Self.shownMargin) : Self.unnaturalJapaneseMargin
+            if !asLetters.japanese || shown, asLetters.letters > margin {
                 words = added
             } else if asLetters.japanese || asLetters.letters > -Self.naturalJapaneseMargin {
                 offered.append(possible.word)
@@ -2438,7 +2586,7 @@ public final class SegmentsManager {
                 }
             }
             .max { result.mainResults[$0].value < result.mainResults[$1].value }
-        // When the converter itself prefers Japanese (今日はいい天気です for Kyouhaiitenkidesu), leave it
+        // When the converter itself prefers Japanese, leave it
         if let index, let top = result.mainResults.first, result.mainResults[index].value >= top.value {
             result.mainResults.insert(result.mainResults.remove(at: index), at: 0)
         }
@@ -2916,6 +3064,8 @@ public final class SegmentsManager {
         self.clauseAlternatives = []
         self.thoroughConversion = thorough ? .shown : .notRun
         self.zenzaiWroteUntypedLetters = false
+        // Typing stopped: no key will follow until it goes on (see `writingLastWord`)
+        self.lastWordAsFinished = thorough ? self.lastWordReadAsFinished() : nil
         if !thorough {
             self.conversionBeforeThorough = nil
         }
@@ -2923,6 +3073,7 @@ public final class SegmentsManager {
         if composingText.isEmpty {
             self.rawCandidates = nil
             self.latinWordsInput = nil
+            self.lettersShown = nil
             self.wholeConversion = nil
             self.isAlphabetWordInput = false
             self.stopConversion()
@@ -2958,7 +3109,7 @@ public final class SegmentsManager {
                 .init(word: DateTemplateLiteral(format: "aK時mm分", type: .western, language: .japanese, delta: "0", deltaUnit: 1).export(), ruby: "イマ", cid: CIDData.固有名詞.cid, mid: MIDData.一般.mid, value: -18.2)
             ]
 
-        let latinWordsText = self.context.convertsAsTheConverterDoes ? nil : self.latinWordsConversionText(otherReading: requestRichCandidates, contexts: contexts)
+        let latinWordsText = self.context.convertsAsTheConverterDoes ? nil : self.latinWordsConversionText(otherReading: requestRichCandidates, contexts: contexts, thorough: thorough)
         self.withConverter { $0.importDynamicUserDictionary(latinWordsText?.entries ?? [], shortcuts: dynamicShortcuts) }
 
         let leftSideContext = contexts.left
@@ -3002,8 +3153,9 @@ public final class SegmentsManager {
                 text.prefixComplete(composingCount: .inputCount(around.word.elements.upperBound))
                 leftSideContext = (leftSideContext ?? "") + (around.head?.text ?? "") + (contextName ?? around.word.word)
             }
-            // Zenzai converts up to the cursor that Shift+← / → moved, and the converter on its own the whole input: in
-            // place of Zenzai, it gets the part up to the cursor, or the clause would cover the whole input again
+            // Zenzai converts up to the cursor that Shift+← / → moved, and the converter on its own the whole input: when
+            // Zenzai does not convert (in its place, or Zenzai off), it gets the part up to the cursor, or the clause
+            // would cover the whole input again
             let replacingZenzai = !zenzai && self.context.useZenzai
             return self.withConverter(replacingZenzai ? .plain : .input) { converter in
                 // The sessions where the converter decides by the entries (Zenzai rejects candidates made from them)
@@ -3011,7 +3163,7 @@ public final class SegmentsManager {
                     self.startingOverForChangedEntries(latinWordsText?.entries ?? [], plain: replacingZenzai, converter: converter)
                 }
                 let result = converter.requestCandidates(
-                    replacingZenzai && !text.isAtEndIndex ? text.prefixToCursorPosition() : text,
+                    !withZenzai && !text.isAtEndIndex ? text.prefixToCursorPosition() : text,
                     options: self.options(
                         leftSideContext: leftSideContext,
                         rightSideContext: rightSideContext,
@@ -3044,6 +3196,7 @@ public final class SegmentsManager {
             self.rawCandidates = result
             self.hasLatinWords = false
             self.latinWordsInput = nil
+            self.lettersShown = nil
             self.latinCandidate = self.makeLatinCandidate(result: result)
             self.keepWholeConversion()
             return
@@ -3584,6 +3737,9 @@ public final class SegmentsManager {
             // What is shown is committed, the thorough conversion when typing stopped long enough for it. Only a trailing
             // n read as ん here changes the input, and it is converted again as typing that stops would have it
             _ = self.showThoroughConversion()
+        } else if inputState == .composing, self.thoroughConversion == .notRun {
+            // Typing had not stopped: the input is finished now (see `writingLastWord`)
+            self.lastWordAsFinished = self.lastWordReadAsFinished()
         }
         let markedText = self.getCurrentMarkedText(inputState: inputState)
         let text = markedText.reduce(into: "") {$0.append(contentsOf: $1.content)}
@@ -3592,6 +3748,37 @@ public final class SegmentsManager {
         }
         self.stopComposition()
         return text
+    }
+
+    /// The Latin word the input ends with as the identification layer reads it once no key will follow (the learned layer
+    /// reading the input as complete; no conversion, no Zenzai), when it runs over letters romaji has not read yet: its
+    /// spelling (iPad for iPad typed last, which was read as IPA and a d still being typed). Nil otherwise
+    private func lastWordReadAsFinished() -> String? {
+        guard self.context.writesLastWordAsFinished, !self.isAlphabetWordInput,
+              self.composingText.input.allSatisfy({ $0.inputStyle != .direct }),
+              let input = TypedInput(self.composingText, clauseEnd: self.clauseEnd, finished: true), input.typingFrom < input.keys.count,
+              let last = self.scriptIdentifier.segment(input).latinWords.last, last.keys.upperBound == input.keys.count else {
+            return nil
+        }
+        return last.word
+    }
+
+    /// The last word of the input read as finished (see `lastWordReadAsFinished`), once typing stopped or at Enter
+    private var lastWordAsFinished: String?
+
+    /// `text` (the conversion shown) with the letters it ends with written as `word` ends, when they are the same letters
+    /// but for their case (IPAd → iPad, GMt → GMT, 10kb → 10KB): reading the input as finished changes nothing else, so the
+    /// kana and kanji are those of the conversion, and Japanese typed partway (褒めt) cannot match a Latin word (homet)
+    static func writingLastWord(of text: String, as word: String?) -> String {
+        guard let word else {
+            return text
+        }
+        let written = String(word.reversed().prefix { $0.isASCII && $0.isLetter }.reversed())
+        let shown = text.reversed().prefix { $0.isASCII && $0.isLetter }.count
+        guard !written.isEmpty, shown == written.count else {
+            return text
+        }
+        return text.suffix(shown).lowercased() == written.lowercased() ? String(text.dropLast(shown)) + written : text
     }
 
     /// A trailing n becomes ん when the input is committed as it is (動きませn → 動きません), as in MS-IME. The convert key
@@ -4248,8 +4435,8 @@ public final class SegmentsManager {
             // The conversion of the input is being made: at once from the one shown before
             self.instantDisplayText
         } else if self.showsLiveConversion, let firstCandidate = self.rawCandidates?.mainResults.first {
-            // Otherwise, if live conversion is on
-            firstCandidate.text
+            // Otherwise, if live conversion is on; once no key will follow, its last word as finished
+            Self.writingLastWord(of: firstCandidate.text, as: self.lastWordAsFinished)
         } else {
             // Otherwise
             self.composingText.convertTarget
@@ -4352,5 +4539,19 @@ private extension ComposingText {
         var c = self
         c.prefixComplete(composingCount: composingCount)
         return c.isEmpty
+    }
+}
+
+/// A count added to and read from any thread
+final class SharedCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func add(_ value: Int) {
+        self.lock.withLock { self.count += value }
+    }
+
+    var value: Int {
+        self.lock.withLock { self.count }
     }
 }

@@ -75,8 +75,11 @@ private let backspace = KeyEventCore(modifierFlags: [], characters: nil, charact
 /// The last is shown as 四月 while typing and as 4月 once typing stops with genmai and the second opinion
 private let sentences = ["kyouhaiitenkidesune", "nihonngodejoshinotsukaikatahajuuyoudesu.", "shigatsunijinjiidougaaru."]
 
+/// Enter commits the conversion of the input once it is finished: what is shown, when nothing at the end is half typed
+/// (these sentences). A Latin word whose last letter romaji has not read yet is read whole first (iPad, not IPA and a d
+/// still being typed): see FinishedInputTests
 @MainActor
-@Test("打鍵が止まる前の Enter は、表示している変換をそのまま確定する", .enabled(if: models.hasZenzai), arguments: sentences)
+@Test("打鍵が止まる前の Enter は、入力を終わらせた後の変換を確定する: 最後に打ちかけの字が無ければ、表示している変換そのもの", .enabled(if: models.hasZenzai), arguments: sentences)
 func enterBeforePauseCommitsWhatIsShown(keys: String) {
     let typing = Typing(zenzai: true)
     typing.type(keys)
