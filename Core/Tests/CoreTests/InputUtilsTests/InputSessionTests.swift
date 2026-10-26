@@ -352,7 +352,7 @@ struct InputSessionTests {
         #expect(!session.handle(self.escape))
     }
 
-    @Test("ライブ変換で変換されて見える入力の Esc は、ひらがなに戻して打ち続けられるようにし、もう一度押すと消す")
+    @Test("ライブ変換で変換されて見える入力の Esc は、ひらがなに戻し、もう一度押すと消す。続けて打つとまたライブ変換で見える")
     func escapeShowsReadingBeforeClearing() {
         let (session, host) = self.makeSession(liveConversion: true)
         self.type("kyouhaiitenkidesu", into: session)
@@ -360,8 +360,10 @@ struct InputSessionTests {
         #expect(session.handle(self.escape))
         #expect(host.markedText == "きょうはいいてんきです")
         #expect(session.inputState == .composing)
-        // Typing goes on at the reading (MS-IME: the input stays unconverted until Space), so Esc then clears it
+        // Typing goes on at the end of the input, which live conversion shows converted again
         self.type("ne", into: session)
+        #expect(host.markedText == "今日はいい天気ですね")
+        #expect(session.handle(self.escape))
         #expect(host.markedText == "きょうはいいてんきですね")
         #expect(session.handle(self.escape))
         #expect(host.markedText.isEmpty)
@@ -385,10 +387,8 @@ struct InputSessionTests {
     @Test("読みを編集中に末尾が n のまま Enter を押すと、見えていた読みのまま ん にして確定する（変換に変わらない）")
     func enterWhileEditingReadingKeepsReadingWithTrailingN() {
         let (session, host) = self.makeSession(liveConversion: true)
-        self.type("kyouha", into: session)
-        #expect(host.markedText == "今日は")
+        self.type("kyouhahon", into: session)
         #expect(session.handle(self.escape))
-        self.type("hon", into: session)
         #expect(host.markedText == "きょうはほn")
         #expect(session.handle(self.enter))
         #expect(host.inserted == ["きょうはほん"])

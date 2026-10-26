@@ -891,6 +891,19 @@ public final class SegmentsManager {
 
     @MainActor
     public func editSegment(count: Int) {
+        // A clause in letters stays in letters, and its end moves by keys (see `LettersClause`): pins, typed for ピンす,
+        // becomes pin, and what is left reads する
+        let function = self.lastFunction.flatMap { last in
+            (last.function == .nine || last.function == .ten) && self.selectedCandidate?.text == last.text ? last : nil
+        }
+        var letters: LettersClause?
+        if let held = self.lettersClause, function == nil, held.shown == self.selectedCandidate?.text {
+            letters = held
+        } else if function != nil || count < 0, let chosen = self.chosenCandidate, var word = self.letters(shownBy: chosen.candidate) {
+            word.limit = function == nil ? word.keys.count : nil
+            letters = word
+        }
+        self.lettersClause = nil
         // The clauses after this one are read again once it ends elsewhere
         self.laterClauses = []
         // The clause end is edited now, not the reading
@@ -898,33 +911,155 @@ public final class SegmentsManager {
         self.readingCaret = nil
         // The end moves by the kana of the input as the converter reads it (see `clauseEnd`), from the end of the
         // candidate chosen when one is, else from where it is
-        var text = self.composingText
-        if let latinWordsInput, latinWordsInput.input.count == text.input.count {
-            text = latinWordsInput
-        }
+        let text = self.readingText
         var end = self.clauseEnd
         if let selectionIndex, let candidates, candidates.indices.contains(selectionIndex) {
             let (base, rest) = self.remaining(after: candidates[selectionIndex])
             end = rest.isEmpty ? nil : base.input.count - rest.input.count
         }
-        _ = text.moveCursorFromCursorPosition(count: Self.surfaceIndex(of: end, in: text) - text.convertTargetCursorPosition)
-        if count > 0, text.isAtEndIndex, !self.didExperienceSegmentEdition {
-            // If the end is at the right end, move it to just after the left end
-            _ = text.moveCursorFromCursorPosition(count: -text.convertTargetCursorPosition + count)
+        // One key at a time, the first key at least; the separator Space put at the end is no key
+        let keyCount = (text.input.lastIndex { $0.piece != .compositionSeparator } ?? -1) + 1
+        let moved = max(1, (end ?? keyCount) + count)
+        if let held = letters, held.limit.map({ moved <= $0 }) ?? true {
+            end = moved < keyCount ? moved : nil
         } else {
-            // Otherwise, move it
-            _ = text.moveCursorFromCursorPosition(count: count)
+            // Past the keys of the word, the clause takes in kana (GitHub, GitHubに)
+            letters = nil
+            // Where a character of the reading ends (see `clauseEnds`), the first at least
+            let ends = Self.clauseEnds(of: text).filter { $0.surface > 0 && $0.surface < text.convertTarget.count }
+            // If the end is at the right end, move it to just after the left end; otherwise, move it
+            let target = count > 0 && end == nil && !self.didExperienceSegmentEdition ? count : Self.surfaceIndex(of: end, in: text) + count
+            let surface = count < 0
+                ? (ends.last { $0.surface <= target } ?? ends.first)?.surface
+                : ends.first { $0.surface >= target }?.surface
+            // Of the elements ending at the same character (a separator that makes none), the last
+            end = surface.flatMap { surface in ends.last { $0.surface == surface }?.element }
         }
-        if text.isAtStartIndex {
-            // If it is at the start, move one step right
-            _ = text.moveCursorFromCursorPosition(count: 1)
-        }
-        self.moveClauseEnd(to: text.isAtEndIndex ? nil : text.prefixToCursorPosition().input.count)
+        self.moveClauseEnd(to: end)
         self.lastOperation = .editSegment
         self.didExperienceSegmentEdition = true
         self.shouldShowCandidateWindow = true
         self.selectionIndex = nil
         self.updateRawCandidate()
+        if var letters {
+            let elements = self.clauseEnd ?? self.composingText.input.count
+            let keys = self.composingText.input.prefix(elements).map(\.piece).inputString(preferIntention: false)
+            let word = letters.word
+            let upper = word.count > 1 && word == word.uppercased()
+            let halfWidth = if word.lowercased() == letters.keys.lowercased() {
+                // The letters shown, cut or carried on over the keys now in the clause (GitHub, GitHu; PIN, PINS)
+                String(word.prefix(keys.count)) + (upper ? keys.dropFirst(word.count).uppercased() : String(keys.dropFirst(word.count)))
+            } else if upper {
+                // Letters spelt otherwise than typed (ping for pins): the keys as typed, in the case of the letters
+                keys.uppercased()
+            } else if word.first?.isUppercase == true {
+                keys.prefix(1).uppercased() + keys.dropFirst()
+            } else {
+                keys
+            }
+            let text = letters.fullWidth ? halfWidth.applyingTransform(.fullwidthToHalfwidth, reverse: true) ?? halfWidth : halfWidth
+            let (base, rest) = self.remaining(after: .inputCount(elements))
+            let reading = String(base.convertTarget.prefix(base.convertTarget.count - rest.convertTarget.count))
+            self.showForm(text, reading: reading, composingCount: .inputCount(elements))
+            letters.shown = text
+            self.lettersClause = letters
+            // F9 and F10 go on cycling from the letters now shown
+            self.lastFunction = function.map { FunctionPress(function: $0.function, text: text, presses: $0.presses) }
+        }
+    }
+
+    /// How many keys `candidate` covers, up to where its reading ends: the library counts with a kana the key that
+    /// made it along with the next (the s of pins for ピン, read with the u for す), which letters leave to the next
+    /// clause (see `clauseEnds`)
+    private func keyCount(of candidate: Candidate) -> Int {
+        let (base, rest) = self.remaining(after: candidate)
+        let count = base.input.count - rest.input.count
+        guard !rest.isEmpty else {
+            return count
+        }
+        let surface = base.convertTarget.count - rest.convertTarget.count
+        return Self.clauseEnds(of: base).last { $0.surface == surface && $0.element <= count }?.element ?? count
+    }
+
+    /// A clause in letters, whose end Shift+← / → move by keys (see `editSegment`): one F9 or F10 wrote, to the end
+    /// of the input either way, or a candidate in letters cut by Shift+←, within the keys of the word (GitHub, GitHu,
+    /// then GitHubに). Letters spelt as typed are cut as shown (GitHu), others show the keys (ping, typed pins, to pin)
+    private struct LettersClause {
+        /// The letters first shown, half-width, and the keys they covered
+        var word: String
+        var keys: String
+        var fullWidth: Bool
+        /// How many keys the clause in letters can take, nil for all
+        var limit: Int?
+        /// The letters shown now, which the clause chosen must still show
+        var shown: String
+    }
+    private var lettersClause: LettersClause?
+
+    /// The clause in letters `candidate` shows when it is a word in letters (see `editSegment`), its keys all it takes
+    private func letters(shownBy candidate: Candidate) -> LettersClause? {
+        let keys = self.composingText.input.prefix(self.keyCount(of: candidate)).map(\.piece).inputString(preferIntention: false)
+        let text = candidate.text.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? candidate.text
+        guard !keys.isEmpty, text.contains(where: \.isLetter), text.allSatisfy({ $0.isASCII && !$0.isWhitespace }) else {
+            return nil
+        }
+        return LettersClause(word: text, keys: keys, fullWidth: text != candidate.text, limit: keys.count, shown: candidate.text)
+    }
+
+    /// The places in `text`, the input as the converter reads it, where the clause being converted can end, as the
+    /// element of the input it ends before and the character of the reading, in order: where a character of the
+    /// reading ends with a key (see `boundaries`), and between the keys of two characters when the first key alone
+    /// makes the first one (the n of ns for ん|す, the first d of dd for っ|ど), which is then fixed as that character
+    /// (see `cutting`). Not between the keys of one character (き|ょ of kyo), which would read otherwise apart
+    private static func clauseEnds(of text: ComposingText) -> [(element: Int, surface: Int)] {
+        let boundaries = Self.boundaries(of: text)
+        var ends = boundaries
+        for (start, next) in zip(boundaries, boundaries.dropFirst())
+        where next.element - start.element >= 2 && next.surface - start.surface >= 2 && Self.fixingKey(start.element, of: text) != nil {
+            ends.append((element: start.element + 1, surface: start.surface + 1))
+        }
+        return ends.sorted { $0.element < $1.element }
+    }
+
+    /// `text` with the key at `element`, the first of the keys of a character of its reading and of the next one, fixed
+    /// as that character (see `fixed`), when the reading stays the same and the next key then makes the next character
+    /// on its own: the n of ns (ん, す), the first d of dd (っ, ど). Nil otherwise (see `clauseEnds`)
+    private static func fixingKey(_ element: Int, of text: ComposingText) -> ComposingText? {
+        let reading = Array(text.convertTarget)
+        guard element + 1 < text.input.count, let surface = text.inputIndexToSurfaceIndexMap()[element], surface < reading.count else {
+            return nil
+        }
+        var input = text.input
+        input[element] = .init(piece: .character(reading[surface]), inputStyle: Self.fixed)
+        var fixed = ComposingText()
+        fixed.insertAtCursorPosition(input)
+        guard fixed.convertTarget == text.convertTarget, fixed.inputIndexToSurfaceIndexMap()[element + 1] == surface + 1 else {
+            return nil
+        }
+        return fixed
+    }
+
+    /// `text`, the input as the converter reads it, with its cursor where the clause being converted ends (see
+    /// `clauseEnd`): before element `end` of the input, or at the end when nil. Between the keys of two characters
+    /// (see `clauseEnds`), the key before the end is fixed as its character, so the converter reads the two apart; where
+    /// the input cannot end (inside a kana of several keys, or letters a function key wrote), at the end of the last
+    /// character before it
+    private static func cutting(_ text: ComposingText, at end: Int?) -> ComposingText {
+        var text = text
+        var surface = text.convertTarget.count
+        if let end, end < text.input.count {
+            let boundaries = text.inputIndexToSurfaceIndexMap()
+            if let boundary = boundaries[end] {
+                surface = boundary
+            } else if end > 0, let start = boundaries[end - 1], let fixed = Self.fixingKey(end - 1, of: text) {
+                text = fixed
+                surface = start + 1
+            } else {
+                surface = (0 ... end).reversed().lazy.compactMap { boundaries[$0] }.first ?? 0
+            }
+        }
+        _ = text.moveCursorFromCursorPosition(count: surface - text.convertTargetCursorPosition)
+        return text
     }
 
     /// The character of `text` that element `end` of its input ends before, or the end of the text when nil
@@ -1112,6 +1247,11 @@ public final class SegmentsManager {
     /// what is typed is not read with them (k before あ is not か)
     private func insertAtReadingCaret(_ elements: [ComposingText.InputElement]) {
         guard self.isEditingReading, let caret = self.readingCaret, caret < self.composingText.input.count else {
+            // Typed at the end of the reading: with live conversion the input is shown converted again, as it was
+            // before the clauses (Esc or BackSpace in them left the reading)
+            if self.liveConversionEnabled {
+                self.isEditingReading = false
+            }
             self.composingText.insertAtCursorPosition(elements)
             return
         }
@@ -1209,12 +1349,17 @@ public final class SegmentsManager {
     /// The input left after `candidate`, with the input it is counted in: the one the converter saw when the candidate
     /// counts keys (see `latinWordsInput`), else the input itself
     private func remaining(after candidate: Candidate) -> (base: ComposingText, rest: ComposingText) {
+        self.remaining(after: candidate.composingCount)
+    }
+
+    /// The input left after the first `count` of it (see `remaining(after:)`)
+    private func remaining(after count: ComposingCount) -> (base: ComposingText, rest: ComposingText) {
         var base = self.composingText
-        if case .inputCount = candidate.composingCount, let latinWordsInput, latinWordsInput.input.count == self.composingText.input.count {
+        if case .inputCount = count, let latinWordsInput, latinWordsInput.input.count == self.composingText.input.count {
             base = latinWordsInput
         }
         var rest = base
-        rest.prefixComplete(composingCount: candidate.composingCount)
+        rest.prefixComplete(composingCount: count)
         return (base, rest)
     }
 
@@ -1305,7 +1450,9 @@ public final class SegmentsManager {
     private func restWords(after candidate: Candidate) -> [DicdataElement]? {
         let (base, rest) = self.remaining(after: candidate)
         let reading = rest.convertTarget
-        guard !reading.isEmpty, let whole = self.wholeConversion, whole.text == whole.data.map(\.word).joined() else {
+        // Not when the keys left read otherwise on their own (uru after pins, from pinsuru, typed for ぴんする)
+        guard !reading.isEmpty, base.convertTarget.hasSuffix(reading), let whole = self.wholeConversion,
+              whole.text == whole.data.map(\.word).joined() else {
             return nil
         }
         // The clause is the start of the conversion: the rest is its other words
@@ -1397,7 +1544,14 @@ public final class SegmentsManager {
         let reading: String
         let keys: String
         let composingCount: ComposingCount
-        if !toWholeInput, let chosen = self.chosenCandidate {
+        if !toWholeInput, let chosen = self.chosenCandidate, function == .nine || function == .ten {
+            // The keys up to where the clause's reading ends, as typed: ピン, typed pins for ピンす, is pin
+            let count = self.keyCount(of: chosen.candidate)
+            let (base, rest) = self.remaining(after: .inputCount(count))
+            reading = String(base.convertTarget.prefix(base.convertTarget.count - rest.convertTarget.count))
+            keys = self.composingText.input.prefix(count).map(\.piece).inputString(preferIntention: false)
+            composingCount = .inputCount(count)
+        } else if !toWholeInput, let chosen = self.chosenCandidate {
             // The reading with Latin words kept as typed (see `latinWordsInput`), and the keys as typed
             let (base, rest) = self.remaining(after: chosen.candidate)
             reading = String(base.convertTarget.prefix(base.convertTarget.count - rest.convertTarget.count))
@@ -1413,7 +1567,22 @@ public final class SegmentsManager {
         } else {
             0
         }
+        self.showFunctionForm(function, presses: presses, reading: reading, keys: keys, composingCount: composingCount)
+    }
+
+    @MainActor
+    private func showFunctionForm(_ function: UserAction.Function, presses: Int, reading: String, keys: String, composingCount: ComposingCount) {
         let text = Self.functionForm(function, reading: reading, keys: keys, presses: presses)
+        self.showForm(text, reading: reading, composingCount: composingCount)
+        self.lastFunction = FunctionPress(function: function, text: text, presses: presses)
+        // The list closes until Space asks for it again
+        self.shouldShowCandidateWindow = false
+    }
+
+    /// Shows `text` for the clause being converted, the first `composingCount` of the input, as the candidate chosen,
+    /// a form of it the user asked for (see `applyFunction`, `editSegment`)
+    @MainActor
+    private func showForm(_ text: String, reading: String, composingCount: ComposingCount) {
         // Not learned: a form asked for with a key is not a choice among conversions, and learned with its reading it
         // would come first for that reading from then on. The word itself is marked, so that it stays out of the
         // learning however the clauses around it are learned (as a phrase with them, as the word before the next one)
@@ -1431,9 +1600,6 @@ public final class SegmentsManager {
         self.showingAdditionalCandidateCount = 1
         self.isFixingAdditionalCandidateTop = false
         self.selectionIndex = 0
-        self.lastFunction = FunctionPress(function: function, text: text, presses: presses)
-        // The list closes until Space asks for it again
-        self.shouldShowCandidateWindow = false
     }
 
     /// The form of the function key for `reading` (the kana forms) or `keys` (the letter forms), at the `presses`-th
@@ -1527,9 +1693,16 @@ public final class SegmentsManager {
             // The clause counts the converter's characters; where they are not those of the input, it counts keys
             var counted = clause
             if seen.convertTarget != self.composingText.convertTarget {
-                var prefix = seen
-                _ = prefix.moveCursorFromCursorPosition(count: clause.data.reduce(0) { $0 + $1.ruby.count } - prefix.convertTargetCursorPosition)
-                counted.composingCount = .inputCount(prefix.prefixToCursorPosition().input.count)
+                // The keys up to where the clause's characters end (see `clauseEnds`): the prefix the library makes
+                // for a cursor inside the keys of a kana counts the characters it fixes, not the keys
+                let surface = clause.data.reduce(0) { $0 + $1.ruby.count }
+                if let end = Self.clauseEnds(of: seen).last(where: { $0.surface == surface }) {
+                    counted.composingCount = .inputCount(end.element)
+                } else {
+                    var prefix = seen
+                    _ = prefix.moveCursorFromCursorPosition(count: surface - prefix.convertTargetCursorPosition)
+                    counted.composingCount = .inputCount(prefix.prefixToCursorPosition().input.count)
+                }
             }
             rawCandidates.firstClauseResults.removeAll { $0.text == counted.text }
             rawCandidates.firstClauseResults.insert(counted, at: 0)
@@ -2090,9 +2263,7 @@ public final class SegmentsManager {
         }
         if let end = self.clauseEnd {
             // The clause being converted ends at the same element (Shift+← / → move it, see `clauseEnd`)
-            var prefix = ComposingText()
-            prefix.insertAtCursorPosition(Array(elements.prefix(end)))
-            _ = text.moveCursorFromCursorPosition(count: prefix.convertTarget.count - text.convertTargetCursorPosition)
+            text = Self.cutting(text, at: end)
         }
         return LatinWordsConversion(
             text: text,
@@ -2784,7 +2955,8 @@ public final class SegmentsManager {
         let contextWord = self.context.useZenzai ? latinWordsText.flatMap { Self.contextWord(of: $0) } : nil
         let contextName = contextWord.flatMap { self.japaneseName(of: $0.word) }
         func convert(zenzai: Bool) -> ConversionResult {
-            var text = latinWordsText?.text ?? self.composingText
+            // The input as typed ends the clause where the converter's text does (see `cutting`)
+            var text = latinWordsText?.text ?? (self.clauseEnd == nil ? self.composingText : Self.cutting(self.composingText, at: self.clauseEnd))
             var leftSideContext = leftSideContext
             let withZenzai = zenzai && self.context.useZenzai
             // The word converted around, and the conversion of the input before it

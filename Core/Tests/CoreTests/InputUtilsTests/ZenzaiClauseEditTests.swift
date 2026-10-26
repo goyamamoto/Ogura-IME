@@ -341,3 +341,129 @@ func readingCaretPassesThroughACapitalizedWord() {
     #expect(session.handle(backspace))
     #expect(host.withCaret == "きょうはYamamot|さんいあいます")
 }
+
+@MainActor
+@Test("次のかなとキーを分け合うかな（pinsu の ん、paddo の っ）の後ろでも文節が区切れ、きょ の途中では区切らない", .enabled(if: hasZenzaiWeights))
+func clauseEndsAfterKanaThatShareKeysWithTheNext() {
+    let shrink = KeyEventCore(modifierFlags: [.shift], characters: nil, charactersIgnoringModifiers: nil, keyCode: 123)
+    let extend = KeyEventCore(modifierFlags: [.shift], characters: nil, charactersIgnoringModifiers: nil, keyCode: 124)
+    let next = KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 124)
+    let space = KeyEventCore(modifierFlags: [], characters: " ", charactersIgnoringModifiers: " ", keyCode: 49)
+    // ん is made by the s after the n, so no key ends it alone: the clause still ends after it, and the rest reads する
+    let (session, host) = makeSession(learned: true)
+    type("kouyattepinsurunogaiideshou.", into: session)
+    #expect(session.handle(space))
+    #expect(session.handle(next))
+    #expect(host.focused == "ピン", "\(host.before)|\(host.focused)|\(host.rest)")
+    var shown: [String] = []
+    for key in [shrink, extend, extend] {
+        #expect(session.handle(key))
+        shown.append(host.focused + "|" + host.rest.prefix(2))
+    }
+    #expect(shown == ["ピ|んす", "ピン|する", "ピンす|るの"], "\(shown)")
+
+    // っ likewise (the first d of ddo)
+    let (paddo, paddoHost) = makeSession(learned: true)
+    type("kinouhaaipaddoshinnbunnwoyonnda", into: paddo)
+    #expect(paddo.handle(space))
+    var rests: [String] = []
+    for _ in 0 ..< 5 {
+        #expect(paddo.handle(extend))
+        rests.append(paddoHost.rest)
+    }
+    // The clause takes one more character each time, っ too
+    #expect(rests.prefix(4).map { String($0.prefix(4)) } == ["いぱっど", "ぱっど新", "っど新聞", "ど新聞を"], "\(rests)")
+
+    // The keys of きょ make one kana: the clause does not end between き and ょ, which would read きおう
+    let (kyou, kyouHost) = makeSession(learned: true)
+    type("kyouhagithubnipushsita", into: kyou)
+    #expect(kyou.handle(space))
+    for _ in 0 ..< 4 {
+        #expect(kyou.handle(shrink))
+        #expect((kyouHost.focused + kyouHost.rest).hasSuffix("GitHubにpushした"), "\(kyouHost.focused)|\(kyouHost.rest)")
+        #expect(!kyouHost.rest.hasPrefix("お"), "\(kyouHost.focused)|\(kyouHost.rest)")
+    }
+}
+
+@MainActor
+@Test("F10 で英字にした文節は、Shift+← / → で打ったキー 1 つずつ縮み・伸び、英字のまま（pins → pin、残りは する）", .enabled(if: hasZenzaiWeights))
+func lettersClauseMovesByKeys() {
+    let (session, host) = makeSession(learned: true)
+    type("kouyattepinsurunogaiideshou.", into: session)
+    #expect(session.handle(KeyEventCore(modifierFlags: [], characters: " ", charactersIgnoringModifiers: " ", keyCode: 49)))
+    #expect(session.handle(KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 124)))
+    #expect(session.handle(KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 109)))  // F10
+    // The keys of ピン, not the s read with the u for す
+    #expect(host.focused + "|" + host.rest == "pin|するのがいいでしょう。")
+    let shrink = KeyEventCore(modifierFlags: [.shift], characters: nil, charactersIgnoringModifiers: nil, keyCode: 123)
+    let extend = KeyEventCore(modifierFlags: [.shift], characters: nil, charactersIgnoringModifiers: nil, keyCode: 124)
+    var shown: [String] = []
+    for key in [shrink, extend, extend] {
+        #expect(session.handle(key))
+        shown.append(host.focused + "|" + host.rest)
+    }
+    #expect(shown == ["pi|んするのがいいでしょう。", "pin|するのがいいでしょう。", "pins|うるのがいいでしょう。"], "\(shown)")
+    // To the end of the input, still in letters
+    for _ in 0 ..< 30 where !host.rest.isEmpty {
+        #expect(session.handle(extend))
+    }
+    #expect(host.focused == "pinsurunogaiideshou.", "\(host.focused)|\(host.rest)")
+    for _ in 0 ..< 17 {
+        #expect(session.handle(shrink))
+    }
+    #expect(session.handle(KeyEventCore(modifierFlags: [], characters: "\r", charactersIgnoringModifiers: "\r", keyCode: 0x24)))
+    #expect(host.inserted.joined() == "こうやってpinするのがいいでしょう。", "\(host.inserted)")
+}
+
+@MainActor
+@Test("文節を調整して Esc でひらがなに戻ったあと、末尾に打ち足すとライブ変換の表示に戻る", .enabled(if: hasZenzaiWeights))
+func typingAfterLeavingClausesShowsLiveConversion() {
+    let (session, host) = makeSession(learned: true)
+    type("watashihaashitatoukyouniikimasu", into: session)
+    #expect(session.handle(KeyEventCore(modifierFlags: [], characters: " ", charactersIgnoringModifiers: " ", keyCode: 49)))
+    #expect(session.handle(KeyEventCore(modifierFlags: [.shift], characters: nil, charactersIgnoringModifiers: nil, keyCode: 123)))
+    #expect(session.handle(KeyEventCore(modifierFlags: [], characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", keyCode: 53)))
+    #expect(host.markedText == "わたしはあしたとうきょうにいきます")
+    type("yo", into: session)
+    #expect(host.markedText == "私は明日東京に行きますよ")
+}
+
+@MainActor
+@Test("英字の候補を選んだ文節は、Shift+← でキー 1 つずつ縮み、語のキーを越えて伸ばすとかなを取り込む", .enabled(if: hasZenzaiWeights))
+func lettersCandidateMovesByKeys() {
+    let shrink = KeyEventCore(modifierFlags: [.shift], characters: nil, charactersIgnoringModifiers: nil, keyCode: 123)
+    let extend = KeyEventCore(modifierFlags: [.shift], characters: nil, charactersIgnoringModifiers: nil, keyCode: 124)
+    let space = KeyEventCore(modifierFlags: [], characters: " ", charactersIgnoringModifiers: " ", keyCode: 49)
+    let enter = KeyEventCore(modifierFlags: [], characters: "\r", charactersIgnoringModifiers: "\r", keyCode: 0x24)
+    do {
+        // ping, a candidate for ピン typed pin: the keys as typed
+        let (session, host) = makeSession(learned: true)
+        type("kouyattepinsurunogaiideshou.", into: session)
+        #expect(session.handle(space))
+        #expect(session.handle(KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 124)))
+        for _ in 0 ..< 10 where host.focused != "ping" {
+            #expect(session.handle(space))
+        }
+        #expect(host.focused == "ping")
+        var shown: [String] = []
+        for key in [shrink, shrink, extend] {
+            #expect(session.handle(key))
+            shown.append(host.focused + "|" + host.rest)
+        }
+        #expect(shown == ["pin|するのがいいでしょう。", "pi|んするのがいいでしょう。", "pin|するのがいいでしょう。"], "\(shown)")
+        #expect(session.handle(enter))
+        #expect(host.inserted.joined() == "こうやってpinするのがいいでしょう。", "\(host.inserted)")
+    }
+    do {
+        // GitHub, the letters cut as shown, and back to GitHubに
+        let (session, host) = makeSession(learned: true)
+        type("githubnipushshita", into: session)
+        #expect(session.handle(space))
+        var shown: [String] = []
+        for key in [shrink, shrink, shrink, extend, extend, extend] {
+            #expect(session.handle(key))
+            shown.append(host.focused + "|" + host.rest)
+        }
+        #expect(shown == ["GitHub|にpushした", "GitHu|bにpushした", "GitH|ubにpushした", "GitHu|bにpushした", "GitHub|にpushした", "GitHubに|pushした"], "\(shown)")
+    }
+}
