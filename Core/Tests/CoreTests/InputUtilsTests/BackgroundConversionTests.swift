@@ -283,22 +283,22 @@ func thoroughConversionInTheBackground() throws {
 }
 
 @MainActor
-@Test("変換が大きく遅れたら文字キーを受け付けず、追いついたら再び受け付ける（押しっぱなしのキー）", .enabled(if: hasModels))
-func typingPausesWhileTheConversionIsFarBehind() throws {
+@Test("変換が大きく遅れても文字キーは捨てない: 遅れが大きくなったら変換を待ってから入れ、どの鍵も読みに入る（押しっぱなしのキー）", .enabled(if: hasModels))
+func typingWaitsForTheConversionWhenFarBehind() throws {
     let converter = KanaKanjiConverter.withDefaultDictionary()
     let memory = freshMemory()
     defer { try? FileManager.default.removeItem(at: memory) }
     let typing = Typing(converter: converter, memory: memory, background: true)
     _ = typing.typeConverting("kyouha")
-    let converted = typing.host.markedText
-    // A key held down: the background does not catch up
+    // A key held down: the background does not catch up, every key goes in all the same
     typing.type(String(repeating: "a", count: 40))
     let segmentsManager = typing.session.segmentsManager
-    #expect(segmentsManager.unconvertedCharacterCount == InputSession.typingPausesAt)
-    #expect(typing.host.markedText == converted + String(repeating: "あ", count: InputSession.typingPausesAt))
+    #expect(segmentsManager.convertTarget == "きょうは" + String(repeating: "あ", count: 40), "\(segmentsManager.convertTarget)")
+    // Never far behind for long: the conversion is made at the key that would leave it too far behind
+    #expect(segmentsManager.unconvertedCharacterCount <= InputSession.typingPausesAt)
     // The other keys still work: Backspace waits for the conversion and deletes
     _ = typing.session.handle(KeyEventCore(modifierFlags: [], characters: nil, charactersIgnoringModifiers: nil, keyCode: 51))
-    #expect(segmentsManager.convertTarget == "きょうは" + String(repeating: "あ", count: InputSession.typingPausesAt - 1))
+    #expect(segmentsManager.convertTarget == "きょうは" + String(repeating: "あ", count: 39))
     // Typing again once the conversion caught up
     typing.conversions?.runAll()
     #expect(segmentsManager.unconvertedCharacterCount == 0)

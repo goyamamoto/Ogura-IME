@@ -66,10 +66,10 @@ if [ ! -f "${ZENZ}" ] || [ "$(stat -f %z "${ZENZ}")" -lt 10000000 ]; then
     echo "zenz-v3.2-small の重み（${ZENZ}）が無いか、LFS ポインタのままです。git submodule update --init --recursive と git lfs pull を実行してください。"
     exit 1
 fi
-# The supplementary dictionary is built, not committed (Ogura/Resources/Dictionary/supplement/README.md)
-SUPPLEMENT="Ogura/Resources/Dictionary/supplement/supplement.louds"
-if [ ! -s "${SUPPLEMENT}" ]; then
-    echo "補助辞書（${SUPPLEMENT}）がありません。先に Tools/build_supplement_dictionary.sh を実行してください（docs/development.md を参照）。"
+# The supplementary dictionary is built, not committed (Ogura/Resources/Dictionary/supplement/README.md): it must be
+# there, and be the one of this version (the committed list of its files' SHA-256). The check says what is wrong
+if ! Tools/check_supplement_dictionary.sh; then
+    echo "補助辞書を確かめてから実行してください（docs/development.md を参照）。"
     exit 1
 fi
 
@@ -94,7 +94,8 @@ if [ "$UNSIGNED" = true ]; then
         ENABLE_CODE_COVERAGE=NO CLANG_COVERAGE_MAPPING=NO
     mkdir -p "${EXPORT_PATH}"
     cp -R build/DerivedData/Build/Products/Release/Ogura.app "${APP_PATH}"
-    codesign --force --deep --sign - --entitlements Ogura/Ogura.entitlements "${APP_PATH}"
+    # The entitlements with their build variables written in (codesign does not expand them; see the tool)
+    Tools/sign_adhoc.sh "${APP_PATH}"
 else
     # Fetch dependencies fresh every time and do not reuse leftovers from earlier builds. MLX runs only on Apple Silicon, so build arm64 only
     xcodebuild -project Ogura.xcodeproj -scheme Ogura -configuration Release \
@@ -121,6 +122,12 @@ else
     rm "${OUT}/Ogura.zip"
 fi
 codesign --verify --deep --strict "${APP_PATH}"
+# The input method may register the connection it registers: the name its signature grants is Info.plist's
+# InputMethodConnectionName, no build variable left unexpanded (else macOS cannot reach it through that connection)
+if ! Tools/check_connection_entitlement.sh "${APP_PATH}"; then
+    echo "署名が許す接続の名前が、アプリの InputMethodConnectionName と違います（Ogura.entitlements の変数が展開されていない）。"
+    exit 1
+fi
 
 # Everything the app loads at run time must be in the bundle: the two conversion models, the personalization n-gram model,
 # the reading judge, the supplementary dictionary, the Latin identification model, the license notices, llama.cpp
@@ -149,6 +156,10 @@ if [ "$UNSIGNED" = false ]; then
         || codesign --force --options runtime --timestamp --sign "Developer ID Application" "${SCRIPTS}/register-input-source"
 fi
 
+# pkg.plist says how the installed app is treated: replaced as a whole (files only the old version had are removed),
+# never looked for in another place, and replaced whatever version is installed (BundleIsVersionChecked false).
+# With that check on, the installer leaves a newer app as it is and still ends with "success": going back to an
+# earlier version, or installing a build again, then changes nothing and says nothing.
 pkgbuild --root "${EXPORT_PATH}" \
     --scripts "${SCRIPTS}" \
     --component-plist pkg.plist \
@@ -156,6 +167,11 @@ pkgbuild --root "${EXPORT_PATH}" \
     --version "${VERSION}" \
     --install-location "/Library/Input Methods" \
     "${OUT}/Ogura-component.pkg"
+# The built pkg is looked at, not pkg.plist alone: pkgbuild's own default is to check the version
+if ! Tools/check_pkg_version_check.sh "${OUT}/Ogura-component.pkg"; then
+    echo "pkg が、入っている版を比べる設定でできました（新しい版の上からは入らず、インストーラーは成功と出します）。pkg.plist の BundleIsVersionChecked を false にしてください。"
+    exit 1
+fi
 
 sed "s/@VERSION@/${VERSION}/g" distribution.xml > "${OUT}/distribution.xml"
 

@@ -91,14 +91,22 @@ listed=$(env DYLD_FRAMEWORK_PATH="$frameworks" DYLD_LIBRARY_PATH="$libraries" \
     "$helper" --test-bundle-path "$bundle" --testing-library swift-testing --list-tests 2>/dev/null | grep -c .)
 ran=$(grep -ho 'Test run with [0-9]* test' "$logs"/*.log | awk '{ s += $4 } END { print s + 0 }')
 failed=0
+stopped=0
 for log in "$logs"/*.log; do
     if ! grep -q 'Test run with .* passed' "$log"; then
         failed=$((failed + 1))
-        echo "失敗: ${log:t:r}"
-        grep -E '✘|Fatal|error:' "$log" | head -5
+        # A process that stopped (a trap, a crash) ends without the line of its run: it counts as failed, and its log
+        # has no ✘ line to show (the grep finds nothing, which must not end the listing)
+        if ! grep -q 'Test run with' "$log"; then
+            stopped=$((stopped + 1))
+            echo "失敗（プロセスが止まった）: ${log:t:r}"
+        else
+            echo "失敗: ${log:t:r}"
+        fi
+        grep -E '✘|Fatal|error:' "$log" | head -5 || true
     fi
 done
-echo "${#parts} プロセスで $ran 件のテストを実行（バンドルにあるのは $listed 件）、失敗したプロセスは $failed"
+echo "${#parts} プロセスで $ran 件のテストを実行（バンドルにあるのは $listed 件）、失敗したプロセスは $failed（うち止まったもの $stopped）"
 if [ "$failed" -gt 0 ] || [ "$ran" -lt "$listed" ]; then
     exit 1
 fi

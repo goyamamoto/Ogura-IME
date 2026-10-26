@@ -8,11 +8,14 @@ ADHOC=false
 # Build on what the last build left (build/DerivedData) instead of from clean: after a change to Ogura or Core only
 # those are compiled again, not the dependencies
 INCREMENTAL=false
+# Build although the supplementary dictionary is not there (see the check below)
+WITHOUT_SUPPLEMENT=false
 TEAM_ID="${OGURA_TEAM_ID:-}"
 
 # Parse command-line options
 while [[ "$#" -gt 0 ]]; do
     case $1 in
+        --without-supplement) WITHOUT_SUPPLEMENT=true ;;
         --ignore-lint) IGNORE_LINT=true ;;
         --dry-run) DRY_RUN=true ;;
         --no-pkill) NO_PKILL=true ;;
@@ -23,6 +26,25 @@ while [[ "$#" -gt 0 ]]; do
     esac
     shift
 done
+
+# The supplementary dictionary is built, not committed (Ogura/Resources/Dictionary/supplement/README.md), so a new
+# worktree does not have it. The app converts without it and says nothing, and so did every build made here without
+# this check: stop when it is not there, unless told in so many words to go on without it, and stop when it is not
+# the dictionary of this version (the committed list of its files' SHA-256, see Tools/check_supplement_dictionary.sh)
+SUPPLEMENT_STATE=0
+Tools/check_supplement_dictionary.sh || SUPPLEMENT_STATE=$?
+if [ "$SUPPLEMENT_STATE" = 2 ]; then
+    if [ "$WITHOUT_SUPPLEMENT" = false ]; then
+        set +x
+        echo "補助辞書がありません。先に Tools/build_supplement_dictionary.sh を実行してください（docs/development.md を参照）。"
+        echo "補助辞書なしのビルドをあえて作るときだけ、./install.sh --without-supplement と指定してください（変換の結果が変わります）。"
+        exit 1
+    fi
+    echo "注意: 補助辞書なしでビルドします（--without-supplement）。変換の結果は、補助辞書のあるビルドと違います。"
+elif [ "$SUPPLEMENT_STATE" != 0 ]; then
+    # Not the listed one: the check said what differs
+    exit 1
+fi
 
 if [ "$IGNORE_LINT" = false ]; then
     if command -v swiftlint &> /dev/null
@@ -72,8 +94,8 @@ if [ "$ADHOC" = true ]; then
         CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
         ENABLE_CODE_COVERAGE=NO CLANG_COVERAGE_MAPPING=NO
     cp -R build/DerivedData/Build/Products/Release/Ogura.app "$APP_PATH"
-    codesign --force --deep --sign - \
-        --entitlements Ogura/Ogura.entitlements "$APP_PATH"
+    # The entitlements with their build variables written in (codesign does not expand them; see the tool)
+    Tools/sign_adhoc.sh "$APP_PATH"
     codesign --verify --deep --strict "$APP_PATH"
 else
     # Build Release and sign it with an Apple Development certificate (a Personal Team is fine).
@@ -88,6 +110,12 @@ else
     cp -R build/DerivedData/Build/Products/Release/Ogura.app "$APP_PATH"
     codesign --verify --deep --strict "$APP_PATH"
     codesign -dv "$APP_PATH" 2>&1 | grep -E "^(Authority|TeamIdentifier)=" | head -2
+fi
+# The input method may register the connection it registers (see Tools/check_connection_entitlement.sh)
+if ! Tools/check_connection_entitlement.sh "$APP_PATH"; then
+    set +x
+    echo "署名が許す接続の名前が、アプリの InputMethodConnectionName と違います（Ogura.entitlements の変数が展開されていない）。"
+    exit 1
 fi
 
 if [ "$DRY_RUN" = true ]; then

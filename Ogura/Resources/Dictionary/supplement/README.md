@@ -8,6 +8,8 @@
 
 `Tools/build_supplement_dictionary.sh` で作り直せます。Mozc の辞書を取得し、変換器の CLI で内蔵辞書の語彙を書き出し、差分を選んで LOUDS 形式に組みます。
 
+辞書の本体はリポジトリに入れていません（ビルドの前に作ります）。作った辞書がこの版のものかどうかは、`supplement.sha256`（本体の各ファイルの SHA-256 の一覧。こちらはリポジトリに入れています）と照らして確かめます。同じ版の Mozc の辞書と変換器からは、同じファイルができます。`Tools/check_supplement_dictionary.sh` がこの確認をし、`install.sh` と `pkgbuild.sh` は、辞書が無いときと一覧と違うときに止まります。Mozc の辞書や変換器の版を変えて作り直したときは、`Tools/check_supplement_dictionary.sh --write` で一覧を書き直します。
+
 ## ライセンス
 
 - Mozc 本体は BSD 3-Clause License です（`LICENSE-mozc.txt`）。

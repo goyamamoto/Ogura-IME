@@ -48,3 +48,7 @@ $cli dict supplement $work/supplement.tsv --out $out --char_id $dictionary/louds
 cp $work/mozc/LICENSE $out/LICENSE-mozc.txt
 cp $work/mozc/README.txt $out/LICENSE-mozc-dictionary.txt
 echo "built $out"
+# Is it the dictionary of this version (the committed list of its files' SHA-256)? The same revisions give the same
+# bytes on any machine; with another revision of the mozc dictionary or of the converter it differs, and the check
+# says how to write the list anew
+$tools/check_supplement_dictionary.sh $out || true

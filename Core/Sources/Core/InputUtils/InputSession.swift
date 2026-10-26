@@ -199,9 +199,16 @@ public final class InputSession {
             keyBindingStyle: settings.keyBindingStyle
         )
         if Self.typesIntoInput(clientAction), self.segmentsManager.convertsTypingInBackground {
-            if self.pausesTyping() {
-                // Taken and dropped: the conversion is too far behind (a key held down)
-                return true
+            if self.fallsFarBehind() {
+                // The conversion too far behind (a key held down, a long input on a slow Mac): never a key dropped. The
+                // conversion is made here, the key waiting for it (the keys after it wait in the system's queue
+                // meanwhile), and a long input's start goes in then, so that the input stays bounded. Logged with numbers
+                // only, to count how often it happens
+                let (behind, started) = (self.segmentsManager.unconvertedCharacterCount, ProcessInfo.processInfo.systemUptime)
+                self.withSettledConversion {
+                    self.commitLongInputHead()
+                }
+                typingLog.notice("a key waited for the conversion: \(behind, privacy: .public) characters unconverted, \(String(format: "%.3f", ProcessInfo.processInfo.systemUptime - started), privacy: .public) s")
             }
             // Shown at once; the conversion of the input comes from the background (see `segmentsManagerDidUpdateDisplay`)
             return self.handleClientAction(clientAction, callback: callback, settings: settings)
@@ -231,24 +238,16 @@ public final class InputSession {
         self.host?.updateMarkedText(self.markedText)
     }
 
-    /// Keys typed far faster than they convert for long (a key held down, repeating) would leave the conversion ever further
-    /// behind, the input growing and each conversion of it taking longer. Once this many characters of the reading show
-    /// unconverted (see `SegmentsManager.unconvertedCharacterCount`), the keys that type are dropped until the conversion
-    /// catches up to fewer than `typingResumesBelow`; the other keys work as ever
+    /// Keys typed far faster than they convert for long (a key held down, repeating; a long input on a slow Mac) would
+    /// leave the conversion ever further behind, the input growing and each conversion of it taking longer. Once this
+    /// many characters of the reading show unconverted (see `SegmentsManager.unconvertedCharacterCount`), the key that
+    /// types waits for the conversion, made then on the main thread, and a long input's start goes in (see `handle`).
+    /// No key is ever dropped (before, the keys were taken and dropped here, silently)
     static let typingPausesAt = 16
-    static let typingResumesBelow = 4
-    /// Typing is paused (see `typingPausesAt`)
-    private var typingPaused = false
 
-    /// Whether the key that types is dropped (see `typingPausesAt`)
-    private func pausesTyping() -> Bool {
-        let unconverted = self.segmentsManager.unconvertedCharacterCount
-        if self.typingPaused, unconverted < Self.typingResumesBelow {
-            self.typingPaused = false
-        } else if !self.typingPaused, unconverted >= Self.typingPausesAt {
-            self.typingPaused = true
-        }
-        return self.typingPaused
+    /// Whether the conversion is too far behind for the key that types to go on without it (see `typingPausesAt`)
+    private func fallsFarBehind() -> Bool {
+        self.segmentsManager.unconvertedCharacterCount >= Self.typingPausesAt
     }
 
     /// Whether the action only types into the input, which can be shown before it is converted

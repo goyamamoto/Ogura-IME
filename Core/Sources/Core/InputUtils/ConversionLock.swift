@@ -1,4 +1,8 @@
 import Foundation
+import OSLog
+
+/// Typing and its conversion: when a key waits for the conversion (see `InputSession.fallsFarBehind`). Numbers only
+let typingLog = Logger(subsystem: "org.if0.inputmethod.ogura", category: "typing")
 
 /// The lock the conversion runs under. The converter (`KanaKanjiConverter`), its sessions, the identification layer and
 /// their caches are shared by every input session of the process and are not safe to use from two threads at once. The

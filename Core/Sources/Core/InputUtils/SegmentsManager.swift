@@ -13,10 +13,15 @@ public final class SegmentsManager {
         context: Context = Context()
     ) {
         self.kanaKanjiConverter = kanaKanjiConverter
-        self.conversionSessionID = kanaKanjiConverter.createSession()
-        self.plainConversionSessionID = kanaKanjiConverter.createSession()
-        self.lookupSessionID = kanaKanjiConverter.createSession()
-        self.headSessionID = kanaKanjiConverter.createSession()
+        // Made under the lock, as `deinit` removes them: the converter is the process's, and another input's conversion
+        // may be running in the background when a new input comes
+        let sessions = ConversionLock.withLock {
+            (0 ..< 4).map { _ in kanaKanjiConverter.createSession() }
+        }
+        self.conversionSessionID = sessions[0]
+        self.plainConversionSessionID = sessions[1]
+        self.lookupSessionID = sessions[2]
+        self.headSessionID = sessions[3]
         self.applicationDirectoryURL = applicationDirectoryURL
         self.personalizationDirectoryURL = personalizationDirectoryURL
         self.context = context
@@ -203,6 +208,13 @@ public final class SegmentsManager {
         guard self.ownsSessions else {
             return
         }
+        // A job of this input left on the conversion thread converts in its twin, whose sessions are removed here: it is
+        // called off first, and it looks at that under the conversion lock before it converts. One running holds the
+        // lock, so the sessions go once it is done
+        if let job = self.runningJob {
+            self.backgroundJobs.cancel(job)
+        }
+        self.thoroughCancellation?.cancel()
         ConversionLock.withLock {
             self.kanaKanjiConverter.removeSession(self.conversionSessionID)
             self.kanaKanjiConverter.removeSession(self.plainConversionSessionID)
@@ -3927,6 +3939,7 @@ public final class SegmentsManager {
     /// lock, so nothing runs in the background meanwhile, and a job still waiting is called off. A thorough conversion
     /// not yet shown is dropped: the key is for what is shown
     @MainActor public func settleConversion() {
+        let wasPending = self.conversionPending
         if let outcome = self.backgroundJobs.take() {
             if outcome.job == self.runningJob {
                 self.runningJob = nil
@@ -3946,6 +3959,14 @@ public final class SegmentsManager {
         if self.conversionPending {
             self.conversionPending = false
             self.updateRawCandidate()
+        }
+        if wasPending {
+            // What shows is now the conversion of the whole input: the display of the next keys goes on from it, and what
+            // is left unconverted after them is counted from it (see `unconvertedCharacterCount`). Else, until the input
+            // was drawn again, the keys after a key that waited for the conversion would still count all the input typed
+            // since the conversion shown before, and wait each in turn (BackgroundConversionTests'
+            // typingWaitsForTheConversionWhenFarBehind)
+            self.shownConversion = (self.composingText.convertTarget, self.composingDisplayText)
         }
     }
 
@@ -3974,8 +3995,8 @@ public final class SegmentsManager {
     }
 
     /// How many characters of the reading the input shows unconverted while its conversion is being made: those typed
-    /// since the reading of the conversion shown (see `instantDisplayText`). The session stops taking keys while there are
-    /// too many (see `InputSession.pausesTyping`)
+    /// since the reading of the conversion shown (see `instantDisplayText`). With too many, the session's next key waits
+    /// for the conversion (see `InputSession.fallsFarBehind`)
     public var unconvertedCharacterCount: Int {
         guard self.conversionPending else {
             return 0
